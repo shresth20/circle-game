@@ -2,7 +2,8 @@
    HOLE IN THE WALL – Parts of a Circle
    A 2.5D canvas game: a piece of a circle flies down the runway
    toward the wall. Name the part before it hits. Correct → it snaps
-   into the hole and you pass. Wrong → the wall shatters.
+   into the hole and a side-view shot shows it passing through.
+   Wrong → the wall shatters.
 ================================================================== */
 'use strict';
 (() => {
@@ -11,16 +12,45 @@
   const canvas = document.getElementById('game');
   const ctx = canvas.getContext('2d');
 
-  /* ---------------- layout constants ---------------- */
-  const WALL = { cx: 712, cy: 420, r: 165 };            // circle on the wall
-  const WALL_RECT = { x: 432, y: 205, w: 566, h: 445 };  // inner wall panel (for cracks)
-  const RUN_START = { x: 712, y: 935 };                  // where the piece spawns
-  const START_SCALE = 1.9;
+  /* ---------------- assets ---------------- */
+  const ASSET_SRC = {
+    bgFront:   'assets/images/front view bg.png',
+    wallFront: 'assets/images/front view wall.png',
+    bgSide:    'assets/images/long-side-view-bg.png',
+    wallSide:  'assets/images/side-view-wall.png',
+  };
+  const A = {};
+  let assetsLoaded = 0;
+  const assetsTotal = Object.keys(ASSET_SRC).length;
+
+  /* ---------------- layout constants (front view) ---------------- */
+  // wall PNG placed so its face lands where the wall sits in the room
+  const FRONT_WALL = { x: 271, y: 77, w: 1448 * 0.59, h: 1086 * 0.59 };
+  const WALL = { cx: 698, cy: 430, r: 165 };               // circle on the wall face
+  const WALL_RECT = { x: 436, y: 201, w: 524, h: 454 };     // wall face (for cracks)
+  const RUN_START = { x: 700, y: 935 };                      // where the piece spawns
+  const startScale = r => PARTS[r.type].major ? 1.3 : 1.55;
   const TOTAL_LEVELS = 10;
   const PANEL = { x: 1095, y: 125, w: 540, h: 580 };
   const BTN = { x: 1120, y0: 300, w: 490, h: 64, gap: 14 };
   const START_BTN = { x: W / 2 - 170, y: 760, w: 340, h: 74 };
   const MUTE_BTN = { x: 1600, y: 890, r: 22 };
+
+  /* ---------------- layout constants (side view) ---------------- */
+  const SIDE = {
+    bgW: 2089 * (H / 753),      // side background scaled to canvas height
+    ws: 0.72, wx: 823, wy: 70,  // side wall PNG scale + world position
+    faceCx: 940, faceCy: 575,   // hole centre on the wall face (PNG px)
+    persp: 0.41 / 400,          // perspective growth per PNG px along the face
+    slope: -0.06,               // face centre-line slope
+    fu: 0.62, fv: 1.15,         // local circle units → face units (foreshortening)
+    depth: 22,                  // piece thickness (PNG px)
+    slide: 160,                 // world px the piece slides while inside the hole
+    dur: 3.0,
+  };
+  SIDE.holeX = SIDE.wx + SIDE.faceCx * SIDE.ws;
+  SIDE.holeY = SIDE.wy + SIDE.faceCy * SIDE.ws;
+  SIDE.wallRight = SIDE.wx + 1420 * SIDE.ws;
 
   const C = {
     pink: '#ff3fa4', pinkLight: '#ff8fd0', pinkDark: '#9c0f5e',
@@ -30,31 +60,35 @@
 
   /* ---------------- curriculum ---------------- */
   const PARTS = {
-    sector:   { name: 'Sector',   desc: 'The slice between two radii and an arc.' },
-    segment:  { name: 'Segment',  desc: 'The region between a chord and an arc.' },
-    arc:      { name: 'Arc',      desc: 'A curved piece of the circumference.' },
-    chord:    { name: 'Chord',    desc: 'A straight line joining two points on the circle.' },
-    radius:   { name: 'Radius',   desc: 'A line from the centre to the circumference.' },
-    diameter: { name: 'Diameter', desc: 'A chord that passes through the centre.' },
+    minor_arc:     { name: 'Minor Arc',     kind: 'arc',     major: false, sibling: 'major_arc',
+                     desc: 'An arc smaller than half the circle (less than 180°).' },
+    major_arc:     { name: 'Major Arc',     kind: 'arc',     major: true,  sibling: 'minor_arc',
+                     desc: 'An arc larger than half the circle (more than 180°).' },
+    minor_sector:  { name: 'Minor Sector',  kind: 'sector',  major: false, sibling: 'major_sector',
+                     desc: 'The smaller slice between two radii and an arc.' },
+    major_sector:  { name: 'Major Sector',  kind: 'sector',  major: true,  sibling: 'minor_sector',
+                     desc: 'The larger slice between two radii and an arc.' },
+    minor_segment: { name: 'Minor Segment', kind: 'segment', major: false, sibling: 'major_segment',
+                     desc: 'The smaller region cut off by a chord.' },
+    major_segment: { name: 'Major Segment', kind: 'segment', major: true,  sibling: 'minor_segment',
+                     desc: 'The larger region cut off by a chord.' },
   };
   const ALL_TYPES = Object.keys(PARTS);
-  const levelPool = lvl => lvl <= 3 ? ['sector', 'segment', 'arc', 'chord']
-                       : lvl <= 6 ? ['sector', 'segment', 'arc', 'chord', 'radius']
-                       : ALL_TYPES;
+  const levelPool = lvl => lvl <= 3 ? ['minor_arc', 'major_arc', 'minor_sector', 'major_sector'] : ALL_TYPES;
   const levelDuration = lvl => Math.max(4.5, 9.5 - (lvl - 1) * 0.55);
 
   /* ---------------- game state ---------------- */
   const G = {
-    state: 'loading',       // loading | title | intro | play | resolve | gameover | win
+    state: 'loading',  // loading | title | intro | play | resolve | pass | gameover | win
     level: 1, score: 0, lives: 3, streak: 0, correctCount: 0,
     best: +(localStorage.getItem('hitw_best') || 0),
-    round: null, lastType: null,
+    round: null, lastType: null, side: null,
     time: 0, introT: 0, rebuildT: 0,
-    fx: { shake: 0, flash: 0, flashColor: '#fff', zoom: 0, sweep: 0 },
+    fx: { shake: 0, flash: 0, flashColor: '#fff', zoom: 0, sweep: 0, wallShake: 0, wallJx: 0, wallJy: 0 },
     particles: [], floaters: [], cracks: null, crackT: 0,
     heartAnim: [0, 0, 0],
     hover: -1, hoverStart: false, hoverMute: false,
-    scoreDisplay: 0, paused: false,
+    scoreDisplay: 0, paused: false, freezeOnly: false,
   };
 
   /* ---------------- helpers ---------------- */
@@ -77,7 +111,6 @@
     c.lineTo(x, y + r); c.quadraticCurveTo(x, y, x + r, y);
     c.closePath();
   }
-  // angled sci-fi panel (cut corners)
   function techPanel(c, x, y, w, h, cut = 14) {
     c.beginPath();
     c.moveTo(x + cut, y); c.lineTo(x + w, y); c.lineTo(x + w, y + h - cut);
@@ -107,47 +140,47 @@
 
   /* ---------------- shapes ---------------- */
   function makeShape(type) {
-    const p = { type };
+    const def = PARTS[type];
     const a0 = rnd(0, 360) * DEG;
-    switch (type) {
-      case 'sector':   p.a0 = a0; p.a1 = a0 + rnd(55, 110) * DEG; break;
-      case 'segment':  p.a0 = a0; p.a1 = a0 + rnd(100, 150) * DEG; break;
-      case 'arc':      p.a0 = a0; p.a1 = a0 + rnd(70, 130) * DEG; p.th = 32; break;
-      case 'chord':    p.a0 = a0; p.a1 = a0 + rnd(100, 150) * DEG; p.th = 24; break;
-      case 'radius':   p.a0 = a0; p.th = 24; break;
-      case 'diameter': p.a0 = a0; p.th = 24; break;
+    let span;
+    switch (def.kind) {
+      case 'arc':     span = def.major ? rnd(215, 290) : rnd(70, 145); break;
+      case 'sector':  span = def.major ? rnd(215, 285) : rnd(55, 130); break;
+      case 'segment': span = def.major ? rnd(215, 265) : rnd(95, 145); break;
     }
-    return p;
-  }
-  function barPath(c, x0, y0, x1, y1, th) {
-    const dx = x1 - x0, dy = y1 - y0, L = Math.hypot(dx, dy) || 1;
-    const nx = -dy / L * th / 2, ny = dx / L * th / 2;
-    c.moveTo(x0 + nx, y0 + ny); c.lineTo(x1 + nx, y1 + ny);
-    c.lineTo(x1 - nx, y1 - ny); c.lineTo(x0 - nx, y0 - ny);
-    c.closePath();
+    return { kind: def.kind, a0, a1: a0 + span * DEG, th: 34 };
   }
   function tracePath(c, p, R) {
     c.beginPath();
-    switch (p.type) {
-      case 'sector':   c.moveTo(0, 0); c.arc(0, 0, R, p.a0, p.a1); c.closePath(); break;
-      case 'segment':  c.arc(0, 0, R, p.a0, p.a1); c.closePath(); break;
-      case 'arc':      c.arc(0, 0, R, p.a0, p.a1); c.arc(0, 0, R - p.th, p.a1, p.a0, true); c.closePath(); break;
-      case 'chord':    barPath(c, R * Math.cos(p.a0), R * Math.sin(p.a0), R * Math.cos(p.a1), R * Math.sin(p.a1), p.th); break;
-      case 'radius':   barPath(c, 0, 0, R * Math.cos(p.a0), R * Math.sin(p.a0), p.th); break;
-      case 'diameter': barPath(c, -R * Math.cos(p.a0), -R * Math.sin(p.a0), R * Math.cos(p.a0), R * Math.sin(p.a0), p.th); break;
+    switch (p.kind) {
+      case 'sector':  c.moveTo(0, 0); c.arc(0, 0, R, p.a0, p.a1); c.closePath(); break;
+      case 'segment': c.arc(0, 0, R, p.a0, p.a1); c.closePath(); break;
+      case 'arc':     c.arc(0, 0, R, p.a0, p.a1); c.arc(0, 0, R - p.th, p.a1, p.a0, true); c.closePath(); break;
     }
   }
+  // polygon version of the shape (used for the perspective side view)
+  function shapePolygon(p, R, steps = 48) {
+    const pts = [];
+    const arcPts = (rad, from, to) => {
+      for (let i = 0; i <= steps; i++) {
+        const a = lerp(from, to, i / steps);
+        pts.push({ x: Math.cos(a) * rad, y: Math.sin(a) * rad });
+      }
+    };
+    if (p.kind === 'sector') pts.push({ x: 0, y: 0 });
+    arcPts(R, p.a0, p.a1);
+    if (p.kind === 'arc') arcPts(R - p.th, p.a1, p.a0);
+    return pts;
+  }
+  // true area centroid of the shape (for centring the flying piece)
   function centroid(p) {
     const R = WALL.r;
-    const mid = (p.a0 + (p.a1 ?? p.a0)) / 2;
+    const th = p.a1 - p.a0, mid = (p.a0 + p.a1) / 2;
     let d = 0;
-    switch (p.type) {
-      case 'sector': d = R * 0.5; break;
-      case 'segment': d = R * 0.78; break;
-      case 'arc': d = R - p.th / 2; break;
-      case 'chord': d = R * Math.cos((p.a1 - p.a0) / 2); break;
-      case 'radius': d = R * 0.5; break;
-      case 'diameter': d = 0; break;
+    switch (p.kind) {
+      case 'sector':  d = 4 * R * Math.sin(th / 2) / (3 * th); break;
+      case 'segment': d = 4 * R * Math.pow(Math.sin(th / 2), 3) / (3 * (th - Math.sin(th))); break;
+      case 'arc':     d = (R - p.th / 2) * Math.sin(th / 2) / (th / 2); break;
     }
     return { x: Math.cos(mid) * d, y: Math.sin(mid) * d };
   }
@@ -158,21 +191,23 @@
     let type;
     do { type = pool[Math.floor(Math.random() * pool.length)]; } while (type === G.lastType && pool.length > 1);
     G.lastType = type;
-    const distract = shuffle(ALL_TYPES.filter(t => t !== type)).slice(0, 3);
-    const options = shuffle([type, ...distract]);
+    // always offer the minor/major sibling so the distinction has to be made
+    const sibling = PARTS[type].sibling;
+    const others = shuffle(ALL_TYPES.filter(t => t !== type && t !== sibling)).slice(0, 2);
+    const options = shuffle([type, sibling, ...others]);
     return {
       type, shape: makeShape(type), options, correctIdx: options.indexOf(type),
       t: 0, duration: levelDuration(level),
       answered: false, chosen: -1, result: null, answerT: 0,
-      zipFrom: 0, zipT: 0, impacted: false, filled: false, broken: false,
-      afterT: 0, tickAcc: 0, bannerT: 0, gained: 0, mult: 1,
+      zipFrom: 0, zipT: 0, impacted: false, filled: false, broken: false, passDone: false,
+      afterT: 0, tickAcc: 0, gained: 0, mult: 1,
     };
   }
 
   function startGame() {
-    G.paused = false;
+    G.paused = false; G.freezeOnly = false;
     G.level = 1; G.score = 0; G.scoreDisplay = 0; G.lives = 3; G.streak = 0; G.correctCount = 0;
-    G.lastType = null; G.particles = []; G.floaters = []; G.cracks = null;
+    G.lastType = null; G.particles = []; G.floaters = []; G.cracks = null; G.round = null;
     G.heartAnim = [0, 0, 0];
     SFX.click();
     SFX.startMusic();
@@ -181,12 +216,15 @@
 
   function startRound() {
     const wasBroken = G.round && G.round.broken;
+    const wasPassed = G.round && G.round.passDone;
     G.round = makeRound(G.level);
     G.cracks = null;
-    G.rebuildT = wasBroken ? 1 : 0;
+    G.particles = []; G.floaters = [];
+    G.rebuildT = wasBroken ? 1 : 0;       // wall drops back in from above
     G.state = 'intro';
     G.introT = 1.3;
     G.hover = -1;
+    if (wasPassed) { G.fx.flash = 0.5; G.fx.flashColor = C.cyan; }
     SFX.ready();
   }
 
@@ -202,7 +240,7 @@
 
   function onImpact() {
     const r = G.round;
-    r.impacted = true; r.bannerT = 0;
+    r.impacted = true;
     const cen = centroid(r.shape);
     const ix = WALL.cx + cen.x, iy = WALL.cy + cen.y;
 
@@ -215,26 +253,34 @@
       G.score += r.gained;
       SFX.snap(); SFX.correct();
       if (r.mult > 1) SFX.combo(r.mult);
-      G.fx.flash = 0.6; G.fx.flashColor = C.green; G.fx.zoom = 1; G.fx.sweep = 1; G.fx.shake = 0.25;
+      G.fx.flash = 0.6; G.fx.flashColor = C.green; G.fx.zoom = 1; G.fx.sweep = 1; G.fx.shake = 0.25; G.fx.wallShake = 0.4;
       burstSparks(ix, iy, 46);
       ring(ix, iy, C.green); ring(ix, iy, C.cyan, 0.15);
-      confetti(WALL.cx, WALL.cy - 120, 26);
       floater(ix, iy - 40, `+${r.gained}`, C.green, 44);
       if (r.mult > 1) floater(ix, iy - 95, `COMBO x${r.mult}`, C.yellow, 30);
-      r.afterT = 2.0;
+      r.afterT = 0.85;                       // short beat, then the side-view pass-through
     } else {
       r.broken = true;
       G.streak = 0;
       G.lives = Math.max(0, G.lives - 1);
       G.heartAnim[G.lives] = 1;
       SFX.crash(); SFX.heartLost();
-      G.fx.flash = 0.7; G.fx.flashColor = C.red; G.fx.shake = 1;
+      G.fx.flash = 0.7; G.fx.flashColor = C.red; G.fx.shake = 1; G.fx.wallShake = 1;
       G.cracks = makeCracks(ix, iy); G.crackT = 0;
       shards(ix, iy, 22, C.wall); shards(ix, iy, 12, C.pink);
       burstSparks(ix, iy, 18, [C.red, C.yellow]);
       floater(ix, iy - 40, r.result === 'timeout' ? 'TOO SLOW' : 'WALL BROKEN', C.red, 36);
       r.afterT = 2.8;
     }
+  }
+
+  function startPass() {
+    G.state = 'pass';
+    G.side = { t: 0, entered: false, exited: false };
+    G.particles = []; G.floaters = [];
+    G.fx.flash = 0.6; G.fx.flashColor = '#ffffff';
+    G.fx.zoom = 0; G.fx.sweep = 0;
+    SFX.launch();
   }
 
   function afterResolve() {
@@ -282,12 +328,19 @@
   function floater(x, y, text, color, size = 36) {
     G.floaters.push({ x, y, text, color, size, life: 1.4, max: 1.4 });
   }
-  function trail(r, pose) {
+  function trail(pose) {
     const cx = pose.x + pose.cen.x * pose.s, cy = pose.y + pose.cen.y * pose.s;
     for (let i = 0; i < 2; i++) {
       G.particles.push({ kind: 'trail', x: cx + rnd(-30, 30) * pose.s, y: cy + rnd(-20, 20) * pose.s,
         vx: rnd(-20, 20), vy: rnd(120, 260), g: 0, life: rnd(0.3, 0.55), max: 0.55,
         size: rnd(3, 8) * pose.s, color: Math.random() < 0.5 ? C.pink : C.cyan });
+    }
+  }
+  function sideTrail(x, y, scale) {
+    for (let i = 0; i < 3; i++) {
+      G.particles.push({ kind: 'streak', x: x + rnd(-10, 10), y: y + rnd(-70, 70) * scale,
+        vx: rnd(-500, -250), vy: rnd(-10, 10), g: 0, life: rnd(0.25, 0.5), max: 0.5,
+        size: rnd(30, 80), color: Math.random() < 0.6 ? C.pink : C.cyan });
     }
   }
   function makeCracks(px, py) {
@@ -337,11 +390,18 @@
   function update(dt) {
     if (G.paused) return;
     G.time += dt;
-    G.fx.shake = Math.max(0, G.fx.shake - dt * 2.2);
-    G.fx.flash = Math.max(0, G.fx.flash - dt * 2.0);
-    G.fx.zoom = Math.max(0, G.fx.zoom - dt * 1.4);
-    G.fx.sweep = Math.max(0, G.fx.sweep - dt * 1.2);
-    G.rebuildT = Math.max(0, G.rebuildT - dt * 1.4);
+    const fx = G.fx;
+    fx.shake = Math.max(0, fx.shake - dt * 2.2);
+    fx.flash = Math.max(0, fx.flash - dt * 2.0);
+    fx.zoom = Math.max(0, fx.zoom - dt * 1.4);
+    fx.sweep = Math.max(0, fx.sweep - dt * 1.2);
+    fx.wallShake = Math.max(0, fx.wallShake - dt * 2.5);
+    fx.wallJx = (Math.random() - 0.5) * 16 * fx.wallShake;
+    fx.wallJy = (Math.random() - 0.5) * 8 * fx.wallShake;
+    if (G.rebuildT > 0) {
+      G.rebuildT = Math.max(0, G.rebuildT - dt * 1.4);
+      if (G.rebuildT === 0) { SFX.snap(); fx.shake = 0.5; fx.wallShake = 0.6; }
+    }
     G.crackT = Math.min(1, G.crackT + dt * 3);
     for (let i = 0; i < 3; i++) G.heartAnim[i] = Math.max(0, G.heartAnim[i] - dt * 1.5);
     if (G.scoreDisplay < G.score) G.scoreDisplay = Math.min(G.score, G.scoreDisplay + Math.max(60, (G.score - G.scoreDisplay) * 6) * dt);
@@ -358,7 +418,7 @@
         const period = r.t > 0.88 ? 0.14 : 0.3;
         if (r.tickAcc > period) { r.tickAcc = 0; SFX.tick(); }
       }
-      trail(r, piecePose(r));
+      trail(piecePose(r));
       if (r.t >= 1) { r.t = 1; answer(-1); }
     } else if (G.state === 'resolve') {
       const r = G.round;
@@ -366,23 +426,166 @@
         r.zipT += dt / 0.32;
         const k = Math.min(1, r.zipT);
         r.t = lerp(r.zipFrom, 1, easeInQuad(k));
-        trail(r, piecePose(r)); trail(r, piecePose(r));
+        trail(piecePose(r)); trail(piecePose(r));
         if (k >= 1) onImpact();
       } else {
-        r.bannerT += dt;
         r.afterT -= dt;
-        if (r.afterT <= 0) afterResolve();
+        if (r.afterT <= 0) {
+          if (r.result === 'correct' && !r.passDone) startPass(); else afterResolve();
+        }
       }
+    } else if (G.state === 'pass') {
+      updatePass(dt);
     }
   }
 
-  /* ---------------- piece ---------------- */
+  /* ---------------- side-view pass-through ---------------- */
+  // piece world x along the track at time t
+  function passX(t) {
+    const HX = SIDE.holeX;
+    if (t < 0.9) return lerp(-250, HX, easeOutCubic(t / 0.9));
+    if (t < 1.35) return HX + SIDE.slide * ((t - 0.9) / 0.45);
+    return HX + SIDE.slide + 1700 * easeInQuad(Math.min(1, (t - 1.35) / 1.05));
+  }
+  function passScale(px) {
+    return clamp(1 + (px - SIDE.holeX) / SIDE.ws * SIDE.persp, 0.5, 1.25);
+  }
+  function updatePass(dt) {
+    const S = G.side, r = G.round;
+    S.t += dt;
+    const px = passX(S.t);
+    const sc = passScale(px);
+    if (S.t < 0.9 || S.t > 1.35) sideTrail(px - 60 * sc, SIDE.holeY, sc);
+    if (!S.entered && S.t >= 0.9) {
+      S.entered = true;
+      SFX.snap();
+      ring(SIDE.holeX, SIDE.holeY, C.green); ring(SIDE.holeX, SIDE.holeY, C.cyan, 0.12);
+      burstSparks(SIDE.holeX, SIDE.holeY, 24, [C.green, C.cyan, '#ffffff']);
+    }
+    if (!S.exited && px > SIDE.wallRight + 40) {
+      S.exited = true;
+      SFX.levelup();
+      burstSparks(SIDE.wallRight + 60, SIDE.holeY, 40, [C.green, C.cyan, C.pink, '#ffffff']);
+      ring(SIDE.wallRight + 60, SIDE.holeY, C.green);
+      floater(SIDE.wallRight + 120, SIDE.holeY - 120, 'PASSED!', C.green, 44);
+      G.fx.flash = 0.35; G.fx.flashColor = C.green;
+    }
+    if (S.t >= SIDE.dur) { r.passDone = true; afterResolve(); }
+  }
+
+  // project a point in circle-local coords onto the angled wall face
+  function projectSide(lx, ly, cx, cy, kScale) {
+    const u = lx * SIDE.fu, v = ly * SIDE.fv;
+    const k = kScale * (1 + u * SIDE.persp);
+    return { x: cx + u * SIDE.ws, y: cy + (v * k + u * SIDE.slope) * SIDE.ws };
+  }
+  function sidePolyPath(pts, cx, cy, kScale, ox = 0, oy = 0) {
+    ctx.beginPath();
+    pts.forEach((p, i) => {
+      const q = projectSide(p.x, p.y, cx, cy, kScale);
+      if (i === 0) ctx.moveTo(q.x + ox, q.y + oy); else ctx.lineTo(q.x + ox, q.y + oy);
+    });
+    ctx.closePath();
+  }
+  function drawSidePiece(pts, cx, cy, kScale) {
+    const depth = SIDE.depth * SIDE.ws * kScale;
+    for (let i = depth; i > 0; i -= 1.5) {
+      sidePolyPath(pts, cx, cy, kScale, i, -i * 0.15);
+      ctx.fillStyle = i > depth * 0.6 ? '#6b0a42' : C.pinkDark;
+      ctx.fill();
+    }
+    ctx.save();
+    ctx.lineWidth = 12; ctx.strokeStyle = 'rgba(255,63,164,0.25)'; ctx.lineJoin = 'round';
+    sidePolyPath(pts, cx, cy, kScale); ctx.stroke();
+    ctx.restore();
+    sidePolyPath(pts, cx, cy, kScale);
+    const g = ctx.createLinearGradient(cx - 80, cy - 150, cx + 80, cy + 150);
+    g.addColorStop(0, '#ffa3dc'); g.addColorStop(0.45, C.pink); g.addColorStop(1, '#d4147a');
+    ctx.fillStyle = g; ctx.fill();
+    ctx.lineWidth = 2.5; ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.lineJoin = 'round'; ctx.stroke();
+  }
+  function drawSideHole(pts, pulse) {
+    sidePolyPath(pts, SIDE.holeX, SIDE.holeY, 1);
+    ctx.fillStyle = '#070b1d'; ctx.fill();
+    ctx.save();
+    sidePolyPath(pts, SIDE.holeX, SIDE.holeY, 1); ctx.clip();
+    ctx.lineWidth = 16; ctx.strokeStyle = `rgba(53,240,255,${0.25 + 0.3 * pulse})`;
+    sidePolyPath(pts, SIDE.holeX, SIDE.holeY, 1); ctx.stroke();
+    ctx.restore();
+    ctx.save();
+    ctx.setLineDash([8, 6]); ctx.lineDashOffset = -G.time * 50;
+    ctx.lineWidth = 2.5; ctx.strokeStyle = '#ff6fc0'; ctx.lineJoin = 'round';
+    sidePolyPath(pts, SIDE.holeX, SIDE.holeY, 1); ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawPassScene() {
+    const S = G.side, r = G.round;
+    const pts = shapePolygon(r.shape, WALL.r);
+    const px = passX(S.t), sc = passScale(px);
+    const camX = clamp(px - 700, 0, SIDE.bgW - W);
+    const pulse = 0.5 + 0.5 * Math.sin(G.time * 6);
+    const phase = px < SIDE.holeX ? 'front' : px < SIDE.holeX + SIDE.slide ? 'inside' : 'behind';
+
+    ctx.save();
+    ctx.translate(-camX, 0);
+    ctx.drawImage(A.bgSide, 0, 0, SIDE.bgW, H);
+
+    // ground glow under the flying piece
+    ctx.save();
+    ctx.globalAlpha = 0.3;
+    ctx.fillStyle = C.pink;
+    ctx.beginPath(); ctx.ellipse(px + 20, 735, 120 * sc, 14, 0, 0, TAU); ctx.fill();
+    ctx.restore();
+
+    if (phase === 'behind') drawSidePiece(pts, px, SIDE.holeY, sc);
+
+    // the angled wall
+    ctx.drawImage(A.wallSide, SIDE.wx, SIDE.wy, 1536 * SIDE.ws, 1024 * SIDE.ws);
+    drawSideHole(pts, pulse);
+
+    if (phase === 'inside') {
+      ctx.save();
+      sidePolyPath(pts, SIDE.holeX, SIDE.holeY, 1); ctx.clip();
+      drawSidePiece(pts, px, SIDE.holeY, 1);
+      ctx.restore();
+      // squeeze glow
+      ctx.save();
+      ctx.globalAlpha = 0.5 + 0.4 * pulse;
+      ctx.lineWidth = 6; ctx.strokeStyle = C.green; ctx.shadowColor = C.green; ctx.shadowBlur = 26; ctx.lineJoin = 'round';
+      sidePolyPath(pts, SIDE.holeX, SIDE.holeY, 1); ctx.stroke();
+      ctx.restore();
+    } else if (phase === 'front') {
+      drawSidePiece(pts, px, SIDE.holeY, sc);
+    } else {
+      // passed: hole glows green
+      ctx.save();
+      ctx.globalAlpha = 0.6 + 0.4 * pulse;
+      ctx.lineWidth = 4; ctx.strokeStyle = C.green; ctx.shadowColor = C.green; ctx.shadowBlur = 20; ctx.lineJoin = 'round';
+      sidePolyPath(pts, SIDE.holeX, SIDE.holeY, 1); ctx.stroke();
+      ctx.restore();
+    }
+    drawParticles();
+    ctx.restore();
+
+    // scene label
+    ctx.save();
+    techPanel(ctx, W / 2 - 190, 118, 380, 40, 10);
+    ctx.fillStyle = 'rgba(8,14,40,0.8)'; ctx.fill();
+    ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(77,255,154,0.7)'; ctx.stroke();
+    ctx.font = font(18, 'Orbitron', 800); ctx.fillStyle = C.green; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.letterSpacing = '3px';
+    ctx.fillText('SIDE VIEW · PASSING THROUGH', W / 2, 139);
+    ctx.restore();
+  }
+
+  /* ---------------- front-view piece ---------------- */
   function piecePose(r) {
-    const t = r.t;
-    const s = lerp(START_SCALE, 1, t);
+    const t = r.t, s0 = startScale(r);
+    const s = lerp(s0, 1, t);
     const cen = centroid(r.shape);
-    const x = lerp(RUN_START.x - cen.x * START_SCALE, WALL.cx, t);
-    const y = lerp(RUN_START.y - cen.y * START_SCALE, WALL.cy, t);
+    const x = lerp(RUN_START.x - cen.x * s0, WALL.cx, t);
+    const y = lerp(RUN_START.y - cen.y * s0, WALL.cy, t);
     const rot = Math.sin(G.time * 5) * 0.08 * (1 - t);
     return { x, y, s, rot, cen };
   }
@@ -394,27 +597,23 @@
     c.rotate(rot);
     c.translate(-pivot.x * s, -pivot.y * s);
     c.scale(s, s);
-    // 2.5D extrusion
     for (let i = depth; i > 0; i -= 1.5) {
       c.save(); c.translate(i * 0.35, i);
       tracePath(c, shape, WALL.r);
       c.fillStyle = i > depth * 0.6 ? '#6b0a42' : C.pinkDark;
       c.fill(); c.restore();
     }
-    // glow halo
     if (opts.glow !== false) {
       c.save();
       c.lineWidth = 14; c.strokeStyle = 'rgba(255,63,164,0.25)'; c.lineJoin = 'round';
       tracePath(c, shape, WALL.r); c.stroke();
       c.restore();
     }
-    // face
     tracePath(c, shape, WALL.r);
     const g = c.createLinearGradient(-WALL.r, -WALL.r, WALL.r, WALL.r);
     g.addColorStop(0, '#ffa3dc'); g.addColorStop(0.45, C.pink); g.addColorStop(1, '#d4147a');
     c.fillStyle = opts.fill || g; c.fill();
     c.lineWidth = 3; c.strokeStyle = 'rgba(255,255,255,0.85)'; c.lineJoin = 'round'; c.stroke();
-    // specular streak
     c.save();
     tracePath(c, shape, WALL.r); c.clip();
     const sg = c.createLinearGradient(-WALL.r, -WALL.r, WALL.r * 0.3, WALL.r * 0.3);
@@ -428,7 +627,6 @@
     const r = G.round;
     if (!r || G.state === 'intro' || r.impacted) return;
     const pose = piecePose(r);
-    // floor shadow
     const sx = pose.x + pose.cen.x * pose.s, sy = pose.y + pose.cen.y * pose.s + 95 * pose.s;
     ctx.save();
     ctx.globalAlpha = 0.35 * (1 - r.t * 0.6);
@@ -438,18 +636,36 @@
     drawPiece(ctx, r.shape, pose.x, pose.y, pose.s, pose.rot, pose.cen);
   }
 
-  /* ---------------- wall ---------------- */
+  /* ---------------- front-view wall ---------------- */
+  function wallOffset() {
+    const drop = -(H + 100) * G.rebuildT * G.rebuildT;
+    return { x: G.fx.wallJx, y: G.fx.wallJy + drop };
+  }
+
+  function drawFrontWall() {
+    const o = wallOffset();
+    ctx.save();
+    ctx.translate(o.x, o.y);
+    // soft ground shadow so the layer sits in the room
+    ctx.save();
+    ctx.globalAlpha = 0.35;
+    ctx.fillStyle = '#000';
+    ctx.beginPath(); ctx.ellipse(698, 668, 420, 26, 0, 0, TAU); ctx.fill();
+    ctx.restore();
+    ctx.drawImage(A.wallFront, FRONT_WALL.x, FRONT_WALL.y, FRONT_WALL.w, FRONT_WALL.h);
+    drawWallCircle();
+    drawCracks();
+    ctx.restore();
+  }
+
   function drawWallCircle() {
     const r = G.round;
     const pulse = 0.5 + 0.5 * Math.sin(G.time * 5);
     ctx.save();
     ctx.translate(WALL.cx, WALL.cy);
-    if (G.rebuildT > 0) ctx.globalAlpha = 1 - G.rebuildT;
 
-    // halo
     ctx.beginPath(); ctx.arc(0, 0, WALL.r + 16, 0, TAU);
     ctx.fillStyle = `rgba(53,240,255,${0.08 + 0.05 * pulse})`; ctx.fill();
-    // disc
     ctx.beginPath(); ctx.arc(0, 0, WALL.r, 0, TAU);
     const g = ctx.createRadialGradient(-50, -60, 10, 0, 0, WALL.r);
     g.addColorStop(0, '#e8f4ff'); g.addColorStop(1, '#9cc2ee');
@@ -460,7 +676,6 @@
 
     if (r && (G.state === 'intro' || G.state === 'play' || G.state === 'resolve')) {
       if (!r.filled) {
-        // the hole
         ctx.save();
         ctx.beginPath(); ctx.arc(0, 0, WALL.r, 0, TAU); ctx.clip();
         tracePath(ctx, r.shape, WALL.r);
@@ -471,14 +686,12 @@
         tracePath(ctx, r.shape, WALL.r); ctx.stroke();
         ctx.restore();
         ctx.restore();
-        // dashed marching outline
         ctx.save();
         ctx.setLineDash([10, 8]); ctx.lineDashOffset = -G.time * 50;
         ctx.lineWidth = 3; ctx.strokeStyle = '#ff6fc0'; ctx.lineJoin = 'round';
         tracePath(ctx, r.shape, WALL.r); ctx.stroke();
         ctx.restore();
       } else {
-        // the fitted piece
         ctx.save();
         ctx.beginPath(); ctx.arc(0, 0, WALL.r, 0, TAU); ctx.clip();
         drawPiece(ctx, r.shape, 0, 0, 1, 0, { x: 0, y: 0 }, { depth: 0, glow: false });
@@ -490,20 +703,9 @@
         ctx.restore();
       }
     }
-    // centre dot
     ctx.beginPath(); ctx.arc(0, 0, 5, 0, TAU); ctx.fillStyle = '#1d2a4a'; ctx.fill();
     ctx.restore();
 
-    // rebuild scanline
-    if (G.rebuildT > 0) {
-      const y = WALL.cy - WALL.r - 10 + (1 - G.rebuildT) * (WALL.r * 2 + 20);
-      ctx.save();
-      ctx.globalAlpha = 0.9;
-      ctx.strokeStyle = C.cyan; ctx.lineWidth = 3; ctx.shadowColor = C.cyan; ctx.shadowBlur = 16;
-      ctx.beginPath(); ctx.moveTo(WALL.cx - WALL.r - 20, y); ctx.lineTo(WALL.cx + WALL.r + 20, y); ctx.stroke();
-      ctx.restore();
-    }
-    // pass-through light sweep
     if (G.fx.sweep > 0) {
       const k = 1 - G.fx.sweep;
       ctx.save();
@@ -549,14 +751,14 @@
     ctx.lineCap = 'round'; ctx.lineJoin = 'round';
     const speed = G.state === 'play' ? 0.45 : 0.18;
     for (let i = 0; i < n; i++) {
-      const u = ((i / n) + G.time * speed) % 1;          // 0 = bottom, 1 = at wall
-      const y = lerp(925, 675, u);
+      const u = ((i / n) + G.time * speed) % 1;
+      const y = lerp(925, 690, u);
       const w = lerp(150, 50, u), h = w * 0.32;
       const a = 0.55 * Math.sin(u * Math.PI);
       ctx.strokeStyle = `rgba(53,240,255,${a})`;
       ctx.lineWidth = lerp(9, 3, u);
       ctx.beginPath();
-      ctx.moveTo(712 - w / 2, y + h); ctx.lineTo(712, y); ctx.lineTo(712 + w / 2, y + h);
+      ctx.moveTo(700 - w / 2, y + h); ctx.lineTo(700, y); ctx.lineTo(700 + w / 2, y + h);
       ctx.stroke();
     }
     ctx.restore();
@@ -572,6 +774,10 @@
         ctx.fillStyle = p.color;
         ctx.shadowColor = p.color; ctx.shadowBlur = 10;
         ctx.beginPath(); ctx.arc(p.x, p.y, p.size * (p.kind === 'trail' ? a : 1), 0, TAU); ctx.fill();
+      } else if (p.kind === 'streak') {
+        ctx.strokeStyle = p.color; ctx.lineWidth = 3 * a; ctx.lineCap = 'round';
+        ctx.shadowColor = p.color; ctx.shadowBlur = 8;
+        ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x - p.size, p.y); ctx.stroke();
       } else if (p.kind === 'ring') {
         if (p.delay > 0) { ctx.restore(); continue; }
         ctx.strokeStyle = p.color; ctx.lineWidth = 6 * a + 1;
@@ -610,7 +816,6 @@
   }
 
   function drawHUD() {
-    // title (top-left)
     panelBg(24, 22, 420, 78, 16);
     ctx.save();
     ctx.font = font(26, 'Orbitron', 900); ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
@@ -623,7 +828,6 @@
     ctx.fillText('PARTS OF A CIRCLE', 46, 80);
     ctx.restore();
 
-    // stats (top-right)
     panelBg(PANEL.x, 22, PANEL.w, 78, 16);
     ctx.save();
     ctx.textBaseline = 'middle';
@@ -637,10 +841,8 @@
     ctx.fillText(`${Math.min(G.level, TOTAL_LEVELS)}/${TOTAL_LEVELS}`, PANEL.x + 90, valY);
     ctx.fillStyle = C.cyan;
     ctx.fillText(String(Math.round(G.scoreDisplay)).padStart(4, '0'), PANEL.x + 265, valY);
-    // dividers
     ctx.strokeStyle = 'rgba(53,240,255,0.35)'; ctx.lineWidth = 1;
     [PANEL.x + 178, PANEL.x + 352].forEach(x => { ctx.beginPath(); ctx.moveTo(x, 36); ctx.lineTo(x, 88); ctx.stroke(); });
-    // hearts
     for (let i = 0; i < 3; i++) {
       const alive = i < G.lives;
       const anim = G.heartAnim[i];
@@ -657,7 +859,6 @@
     }
     ctx.restore();
 
-    // level progress dots
     ctx.save();
     for (let i = 0; i < TOTAL_LEVELS; i++) {
       const x = PANEL.x + 20 + i * ((PANEL.w - 40) / (TOTAL_LEVELS - 1)), y = 112;
@@ -669,7 +870,6 @@
     }
     ctx.restore();
 
-    // mute button
     ctx.save();
     ctx.beginPath(); ctx.arc(MUTE_BTN.x, MUTE_BTN.y, MUTE_BTN.r, 0, TAU);
     ctx.fillStyle = G.hoverMute ? 'rgba(53,240,255,0.25)' : 'rgba(8,14,40,0.75)'; ctx.fill();
@@ -686,7 +886,6 @@
     if (!r) return;
     panelBg(PANEL.x, PANEL.y, PANEL.w, PANEL.h, 18);
 
-    // tag
     ctx.save();
     techPanel(ctx, PANEL.x + 24, PANEL.y + 22, 150, 32, 8);
     ctx.fillStyle = C.cyan; ctx.fill();
@@ -695,20 +894,18 @@
     ctx.fillText('QUESTION', PANEL.x + 99, PANEL.y + 39);
     ctx.restore();
 
-    // question text
     ctx.save();
     ctx.font = font(30, 'Rajdhani', 700); ctx.fillStyle = C.text; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
     ctx.fillText('Which part of the circle is', PANEL.x + 26, PANEL.y + 92);
     ctx.fillText('flying toward the wall?', PANEL.x + 26, PANEL.y + 128);
     ctx.restore();
 
-    // options
     const letters = ['A', 'B', 'C', 'D'];
     for (let i = 0; i < 4; i++) {
       const b = btnRect(i);
       const hovered = G.hover === i && G.state === 'play';
       let fill = 'rgba(16, 26, 70, 0.9)', border = 'rgba(53,240,255,0.6)', badge = C.cyan, textCol = C.text;
-      let scale = hovered ? 1.03 : 1;
+      const scale = hovered ? 1.03 : 1;
       if (r.answered) {
         if (i === r.correctIdx && r.impacted) { fill = 'rgba(20, 90, 60, 0.95)'; border = C.green; badge = C.green; }
         else if (i === r.chosen && r.result !== 'correct') { fill = 'rgba(110, 20, 40, 0.95)'; border = C.red; badge = C.red; }
@@ -722,7 +919,6 @@
       ctx.lineWidth = hovered ? 3 : 2; ctx.strokeStyle = border;
       if (hovered) { ctx.shadowColor = C.cyan; ctx.shadowBlur = 14; }
       ctx.stroke(); ctx.shadowBlur = 0;
-      // letter badge
       ctx.beginPath(); ctx.moveTo(b.x, b.y); ctx.lineTo(b.x + 72, b.y); ctx.lineTo(b.x + 58, b.y + b.h); ctx.lineTo(b.x, b.y + b.h); ctx.closePath();
       ctx.fillStyle = badge; ctx.fill();
       ctx.font = font(26, 'Orbitron', 800); ctx.fillStyle = C.navy; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -739,7 +935,6 @@
       ctx.restore();
     }
 
-    // impact timer
     const barY = PANEL.y + 540, barX = PANEL.x + 26, barW = PANEL.w - 52;
     const t = G.state === 'intro' ? 0 : clamp(r.answered ? r.answerT : r.t, 0, 1);
     const remaining = Math.max(0, (1 - t) * r.duration);
@@ -759,11 +954,10 @@
     }
     ctx.restore();
 
-    // streak + keys hint
     ctx.save();
     ctx.textBaseline = 'middle';
     ctx.font = font(16, 'Rajdhani', 600); ctx.fillStyle = 'rgba(159,179,217,0.8)'; ctx.textAlign = 'left';
-    ctx.fillText('Keys  1 – 4  or  A – D', barX, PANEL.y + 566);
+    ctx.fillText('Keys  1 – 4  or  A – D   ·   P = pause', barX, PANEL.y + 566);
     if (G.streak > 0) {
       const mult = G.streak >= 6 ? 3 : G.streak >= 3 ? 2 : 1;
       ctx.textAlign = 'right';
@@ -777,27 +971,32 @@
   /* ---------------- banners ---------------- */
   function drawBanner() {
     const r = G.round;
-    if (!r || !r.impacted || G.state !== 'resolve') return;
-    const k = clamp(r.bannerT / 0.35, 0, 1);
+    if (!r) return;
+    let bannerT, remaining;
+    if (G.state === 'resolve' && r.impacted && r.result !== 'correct') {
+      bannerT = 2.8 - r.afterT; remaining = r.afterT;
+    } else if (G.state === 'pass' && G.side.t > 1.75) {
+      bannerT = G.side.t - 1.75; remaining = SIDE.dur - G.side.t;
+    } else return;
+    const k = clamp(bannerT / 0.35, 0, 1);
     const pop = easeOutBack(k);
-    const fade = r.afterT < 0.3 ? r.afterT / 0.3 : 1;
+    const fade = remaining < 0.3 ? remaining / 0.3 : 1;
     const ok = r.result === 'correct';
     const title = ok ? 'CORRECT!' : (r.result === 'timeout' ? 'TOO SLOW!' : 'WRONG!');
     const col = ok ? C.green : C.red;
-    const cx = WALL.cx, cy = 775;
+    const cx = W / 2, cy = 800;
     const name = PARTS[r.type].name.toUpperCase();
     const article = /^[AEIOU]/.test(name) ? 'an ' : 'a ';
     ctx.save();
-    ctx.globalAlpha = fade;
+    ctx.globalAlpha = Math.max(0, fade);
     ctx.translate(cx, cy); ctx.scale(pop, pop); ctx.translate(-cx, -cy);
-    techPanel(ctx, cx - 290, cy - 80, 580, 160, 18);
+    techPanel(ctx, cx - 310, cy - 80, 620, 160, 18);
     ctx.fillStyle = 'rgba(6, 10, 30, 0.86)'; ctx.fill();
     ctx.lineWidth = 3; ctx.strokeStyle = col; ctx.shadowColor = col; ctx.shadowBlur = 24; ctx.stroke();
     ctx.shadowBlur = 0;
     glowText(ctx, title, cx, cy - 36, 46, col, col);
-    ctx.font = font(24, 'Rajdhani', 700); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillStyle = C.text;
     const lead = (ok ? "It's " : 'It was ') + article;
+    ctx.textBaseline = 'middle';
     ctx.font = font(24, 'Rajdhani', 700);
     const wLead = ctx.measureText(lead).width;
     ctx.font = font(26, 'Orbitron', 800);
@@ -814,7 +1013,7 @@
   }
 
   function drawIntro() {
-    const k = 1 - G.introT / 1.3;        // 0 → 1
+    const k = 1 - G.introT / 1.3;
     const a = k < 0.15 ? k / 0.15 : k > 0.8 ? (1 - k) / 0.2 : 1;
     const sc = lerp(1.5, 1, easeOutCubic(Math.min(1, k / 0.3)));
     ctx.save();
@@ -834,8 +1033,8 @@
     ctx.restore();
   }
   function togglePause() {
-    if (!['intro', 'play', 'resolve'].includes(G.state)) return;
-    G.paused = !G.paused;
+    if (!['intro', 'play', 'resolve', 'pass'].includes(G.state)) return;
+    G.paused = !G.paused; G.freezeOnly = false;
     SFX.click();
   }
 
@@ -863,17 +1062,16 @@
   }
 
   function drawDemoCircle(cx, cy, R) {
-    // decorative spinning circle with a glowing sector / arc / chord
     ctx.save();
     ctx.translate(cx, cy);
     ctx.beginPath(); ctx.arc(0, 0, R, 0, TAU);
     ctx.fillStyle = 'rgba(159,194,238,0.9)'; ctx.fill();
     ctx.lineWidth = 5; ctx.strokeStyle = '#1d2a4a'; ctx.stroke();
-    const a0 = G.time * 0.6;
+    const a0 = G.time * 0.6, k = R / WALL.r;
     ctx.save(); ctx.beginPath(); ctx.arc(0, 0, R, 0, TAU); ctx.clip();
-    drawPiece(ctx, { type: 'sector', a0, a1: a0 + 80 * DEG }, 0, 0, R / WALL.r, 0, { x: 0, y: 0 }, { depth: 0 });
-    drawPiece(ctx, { type: 'arc', a0: a0 + 150 * DEG, a1: a0 + 250 * DEG, th: 32 }, 0, 0, R / WALL.r, 0, { x: 0, y: 0 }, { depth: 0, fill: C.cyan });
-    drawPiece(ctx, { type: 'chord', a0: a0 + 270 * DEG, a1: a0 + 20 * DEG, th: 24 }, 0, 0, R / WALL.r, 0, { x: 0, y: 0 }, { depth: 0, fill: C.yellow });
+    drawPiece(ctx, { kind: 'sector', a0, a1: a0 + 80 * DEG, th: 34 }, 0, 0, k, 0, { x: 0, y: 0 }, { depth: 0 });
+    drawPiece(ctx, { kind: 'arc', a0: a0 + 120 * DEG, a1: a0 + 330 * DEG, th: 34 }, 0, 0, k, 0, { x: 0, y: 0 }, { depth: 0, fill: C.cyan });
+    drawPiece(ctx, { kind: 'segment', a0: a0 + 150 * DEG, a1: a0 + 250 * DEG, th: 34 }, 0, 0, k, 0, { x: 0, y: 0 }, { depth: 0, fill: C.yellow });
     ctx.restore();
     ctx.beginPath(); ctx.arc(0, 0, 5, 0, TAU); ctx.fillStyle = '#1d2a4a'; ctx.fill();
     ctx.restore();
@@ -893,11 +1091,10 @@
     ctx.fillText('PARTS OF A CIRCLE', W / 2, 150);
     ctx.restore();
 
-    // how to play cards
     const cards = [
       { n: '1', title: 'WATCH', text: 'A piece of a circle flies\ntoward the wall.' },
-      { n: '2', title: 'NAME IT', text: 'Pick its name: Arc, Chord,\nSegment, Sector…' },
-      { n: '3', title: 'PASS OR BREAK', text: 'Correct → it fits the hole.\nWrong → the wall shatters!' },
+      { n: '2', title: 'NAME IT', text: 'Minor or Major? Arc,\nSector or Segment?' },
+      { n: '3', title: 'PASS OR BREAK', text: 'Correct → it passes through.\nWrong → the wall shatters!' },
     ];
     const cw = 330, ch = 150, gap = 30, x0 = W / 2 - (cw * 3 + gap * 2) / 2, y0 = 600;
     cards.forEach((cd, i) => {
@@ -917,7 +1114,7 @@
     if (G.best > 0) {
       ctx.save();
       ctx.font = font(20, 'Rajdhani', 700); ctx.fillStyle = C.yellow; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText(`BEST SCORE  ${G.best}`, W / 2, 560);
+      ctx.fillText(`BEST SCORE  ${G.best}`, W / 2, 190);
       ctx.restore();
     }
   }
@@ -956,36 +1153,55 @@
     drawStartButton('PLAY AGAIN');
   }
 
+  function drawLoading() {
+    ctx.fillStyle = '#05081a'; ctx.fillRect(0, 0, W, H);
+    glowText(ctx, 'LOADING', W / 2, H / 2 - 20, 40, '#fff', C.cyan);
+    const w = 360, x = W / 2 - w / 2, y = H / 2 + 30;
+    roundRect(ctx, x, y, w, 10, 5); ctx.fillStyle = 'rgba(255,255,255,0.12)'; ctx.fill();
+    roundRect(ctx, x, y, w * (assetsLoaded / assetsTotal), 10, 5); ctx.fillStyle = C.cyan; ctx.fill();
+  }
+
   /* ---------------- render ---------------- */
   function render() {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.setTransform(canvas.width / W, 0, 0, canvas.height / H, 0, 0);
 
+    if (G.state === 'loading') { drawLoading(); return; }
+
     ctx.save();
     const sh = G.fx.shake;
     if (sh > 0) ctx.translate((Math.random() - 0.5) * 26 * sh, (Math.random() - 0.5) * 26 * sh);
-    // zoom pulse applies to the scene only, not the HUD
-    ctx.save();
-    if (G.fx.zoom > 0) {
-      const z = 1 + 0.05 * Math.sin(G.fx.zoom * Math.PI);
-      ctx.translate(WALL.cx, WALL.cy); ctx.scale(z, z); ctx.translate(-WALL.cx, -WALL.cy);
+
+    if (G.state === 'pass') {
+      drawPassScene();
+      drawHUD();
+      drawBanner();
+    } else {
+      ctx.save();
+      if (G.fx.zoom > 0) {
+        const z = 1 + 0.05 * Math.sin(G.fx.zoom * Math.PI);
+        ctx.translate(WALL.cx, WALL.cy); ctx.scale(z, z); ctx.translate(-WALL.cx, -WALL.cy);
+      }
+      ctx.drawImage(A.bgFront, 0, 0, W, H);
+      if (G.state === 'title') {
+        ctx.drawImage(A.wallFront, FRONT_WALL.x, FRONT_WALL.y, FRONT_WALL.w, FRONT_WALL.h);
+        ctx.restore();
+        drawTitle();
+        ctx.restore();
+        return;
+      }
+      drawFrontWall();
+      drawRunway();
+      drawFlyingPiece();
+      drawParticles();
+      ctx.restore();
+      drawHUD();
+      drawQuestionPanel();
+      drawBanner();
+      if (G.state === 'intro') drawIntro();
+      if (G.state === 'gameover' || G.state === 'win') { drawParticles(); drawEnd(); }
     }
-    ctx.drawImage(bg, 0, 0, W, H);
-
-    if (G.state === 'title') { ctx.restore(); drawTitle(); ctx.restore(); return; }
-
-    drawWallCircle();
-    drawCracks();
-    drawRunway();
-    drawFlyingPiece();
-    drawParticles();
-    ctx.restore();
-    drawHUD();
-    drawQuestionPanel();
-    drawBanner();
-    if (G.state === 'intro') drawIntro();
-    if (G.state === 'gameover' || G.state === 'win') { drawParticles(); drawEnd(); }
     if (G.paused && !G.freezeOnly) drawPaused();
     ctx.restore();
 
@@ -995,7 +1211,6 @@
       ctx.fillRect(0, 0, W, H);
       ctx.restore();
     }
-    // vignette
     const vg = ctx.createRadialGradient(W / 2, H / 2, H * 0.45, W / 2, H / 2, H * 0.95);
     vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,0.45)');
     ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
@@ -1030,6 +1245,7 @@
   }
   function onDown(e) {
     SFX.unlock();
+    if (G.state === 'loading') return;
     const p = toLogical(e);
     if (Math.hypot(p.x - MUTE_BTN.x, p.y - MUTE_BTN.y) <= MUTE_BTN.r) { SFX.toggleMute(); SFX.click(); return; }
     if (G.state === 'title' || G.state === 'gameover' || G.state === 'win') {
@@ -1046,6 +1262,7 @@
   canvas.addEventListener('pointerdown', onDown);
   window.addEventListener('keydown', e => {
     SFX.unlock();
+    if (G.state === 'loading') return;
     const k = e.key.toLowerCase();
     if (k === ' ' || k === 'enter') {
       if (G.state === 'title' || G.state === 'gameover' || G.state === 'win') { e.preventDefault(); startGame(); }
@@ -1077,11 +1294,17 @@
     requestAnimationFrame(loop);
   }
 
-  const bg = new Image();
-  bg.onload = () => { G.state = 'title'; requestAnimationFrame(loop); };
-  bg.onerror = () => { console.error('Could not load assets/images/bg.png'); G.state = 'title'; requestAnimationFrame(loop); };
-  bg.src = 'assets/images/bg.png';
+  // load every image, then show the title
+  for (const [key, src] of Object.entries(ASSET_SRC)) {
+    const img = new Image();
+    img.onload = () => { assetsLoaded++; if (assetsLoaded === assetsTotal) G.state = 'title'; };
+    img.onerror = () => { console.error('Could not load ' + src); assetsLoaded++; if (assetsLoaded === assetsTotal) G.state = 'title'; };
+    img.src = src;
+    A[key] = img;
+  }
+  requestAnimationFrame(loop);
 
-  // expose for debugging in the console
-  window.HITW = { G, answer, startGame, togglePause, freeze(v) { G.paused = v; G.freezeOnly = v; } };
+  // exposed for debugging in the console
+  window.HITW = { G, SIDE, answer, startGame, togglePause, startPass,
+    freeze(v) { G.paused = v; G.freezeOnly = v; } };
 })();
