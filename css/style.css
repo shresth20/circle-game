@@ -1,0 +1,30 @@
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: #05081a;
+  overflow: hidden;
+  font-family: 'Rajdhani', 'Segoe UI', sans-serif;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: none;
+}
+
+#stage {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(ellipse at center, #0c1340 0%, #05081a 70%);
+}
+
+#game {
+  display: block;
+  aspect-ratio: 1672 / 941;
+  width: min(100vw, calc(100vh * 1672 / 941));
+  height: auto;
+  box-shadow: 0 0 60px rgba(53, 240, 255, 0.15);
+  cursor: default;
+}
