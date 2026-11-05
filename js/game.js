@@ -1,4 +1,4 @@
-/* Game state machine: title -> intro -> (lesson -> wall)x3 -> finale.
+/* Game state machine: title -> intro -> wall x3 -> finale.
    Each wall: present challenge -> select -> throw (front) -> outcome (side)
    -> next.  Correctness comes from ZD.geo.matches on the configured data. */
 window.ZD = window.ZD || {};
@@ -63,7 +63,7 @@ window.ZD = window.ZD || {};
       anime.running.slice().forEach((a) => {
         if (!a.loop) a.pause();
       });
-      ['title', 'intro', 'learn', 'pause', 'complete', 'gameover'].forEach((id) => {
+      ['title', 'intro', 'pause', 'complete', 'gameover'].forEach((id) => {
         const o = document.getElementById(id);
         o.className = 'overlay';
         o.innerHTML = '';
@@ -106,7 +106,6 @@ window.ZD = window.ZD || {};
       side.setScroll(0);
       side.zombie.setPos(side.zombieHome.x, side.zombieHome.y);
       side.idle();
-      ZD.audio.stopSpeech();
     },
 
     /* ----------------------------------------------------------- pause */
@@ -115,7 +114,6 @@ window.ZD = window.ZD || {};
       if (document.getElementById('title').classList.contains('visible')) return;
       this.paused = true;
       ZD.clock.pause();
-      ZD.audio.stopSpeech();
       ZD.audio.play('click');
       ZD.ui.pauseMenu(
         () => this.resume(),
@@ -152,15 +150,9 @@ window.ZD = window.ZD || {};
       ZD.ui.setScore(0, false);
       ZD.ui.showHud(true);
       let wi = 0;
-      const lessonsDone = new Set(); // a wall's lesson plays once, not again after a retry
       while (wi < mission.walls.length) {
         const wall = mission.walls[wi];
         ZD.ui.setProgress(wi, mission.walls.length, wi);
-        this.guard(E);
-        if (wall.lesson && !lessonsDone.has(wall.id)) {
-          lessonsDone.add(wall.id);
-          await this.runLesson(wall.lesson, E);
-        }
         this.guard(E);
         await this.wallTitle(wall, wi);
         const result = await this.playWall(wall, wi, E);
@@ -185,21 +177,6 @@ window.ZD = window.ZD || {};
         wi++;
       }
       return this.finale(E);
-    },
-
-    async runLesson(kind, E) {
-      ZD.scene.camera.cut('front');
-      ZD.scene.front.idle();
-      if (kind === 'encounter') {
-        await ZD.learn.encounter();
-        this.guard(E);
-        await ZD.learn.manipulate();
-      } else if (kind === 'minorMajor') {
-        await ZD.learn.minorMajor();
-      } else if (kind === 'segments') {
-        await ZD.learn.segments();
-      }
-      this.guard(E);
     },
 
     async wallTitle(wall) {
@@ -297,11 +274,6 @@ window.ZD = window.ZD || {};
         return I18n.has(key) ? T(key) : T(I18n.key('hint', 'generic', t.type));
       }
       return T(I18n.key('hint', 'size', t.size));
-    },
-
-    explainFor(target, level) {
-      const t = geo.normalize(target);
-      return T(I18n.key('explain', level === 'basic' ? t.type : t.id));
     },
 
     /* --------------------------------------------- front: throw sequence */
@@ -442,10 +414,9 @@ window.ZD = window.ZD || {};
       side.hero.play({ sheet: 'hero.sideCheer', fps: 12 }).then(() => side.hero.play({ sheet: 'hero.sideIdle', fps: 9, loop: true }));
       ZD.audio.play('yay');
       fx().sparkles(side.fxLayer, side.hero.x, side.hero.y - 200, 14);
-      ZD.ui.showBanner(`${T('fbCorrect')} — ${label}`, this.explainFor(target, level), 'good');
-      I18n.say('voCorrect', { name: label.toLowerCase() });
+      ZD.ui.showBanner(`${T('fbCorrect')} — ${label}`, null, 'good');
       side.wall.glass.unlock().then(() => ZD.audio.play('unlock'));
-      await wait(D(3200));
+      await wait(D(1800));
       this.guard(E);
       await ZD.ui.hideBanner();
     },
@@ -494,7 +465,6 @@ window.ZD = window.ZD || {};
       if (alive) {
         // security reset: zombie pushed back through the wall, glass restored
         ZD.ui.showBanner(T('fbWrong'), hint, 'bad');
-        I18n.say('voWrong', { hint });
         await wait(D(600));
         this.guard(E);
         ZD.audio.play('unlock');
@@ -510,7 +480,7 @@ window.ZD = window.ZD || {};
         side.setTarget(target);
         side.setLamps('');
         document.getElementById('world').classList.remove('alarm');
-        await wait(D(2600));
+        await wait(D(2000));
         this.guard(E);
         await ZD.ui.hideBanner();
         ZD.ui.showBanner(T('fbReset'), null, 'info');
@@ -536,7 +506,6 @@ window.ZD = window.ZD || {};
     async transition(E) {
       const { side } = ZD.scene;
       ZD.ui.showBanner(T('wallCleared'), T('wallNext'), 'good');
-      I18n.say('voCleared');
       await wait(D(900));
       ZD.ui.hideBanner();
       await side.runToNext(1750, 2700, { withZombie: true });
@@ -559,7 +528,6 @@ window.ZD = window.ZD || {};
       ZD.audio.play('fanfare');
       fx().sparkles(side.fxLayer, 1100, 500, 30, '#9ad8ff');
       fx().sparkles(side.fxLayer, 1300, 420, 30, '#fff2a8');
-      I18n.say('voComplete');
       await wait(D(1500));
       this.guard(E);
 
@@ -600,10 +568,8 @@ window.ZD = window.ZD || {};
         el('p', { class: 'go-need', html: T('goLesson', { name: `<b>${label}</b>` }) }),
         el('p', { class: 'go-watch', text: T('goWatch') }),
         demoBox,
-        el('p', { class: 'go-explain', text: this.explainFor(target, wall.level) }),
       ]);
       const p = ZD.ui.panel({ id: 'gameover', title: T('goTitle'), html: body, cls: 'gameover', buttons: [{ label: T('btnRetry'), cls: 'primary' }, { label: T('btnHome'), cls: 'secondary' }] });
-      I18n.say('voGameover');
       ZD.learn.demonstrate(demoBox, target, wall.level);
       const idx = await this.awaitInput(p.result, E);
       this.guard(E);

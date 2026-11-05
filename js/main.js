@@ -34,9 +34,17 @@ async function boot() {
       ZD.ui._syncMute();
     }
   });
+  // No sound while the learner is away: tab hidden, app backgrounded, or the
+  // window lost focus. Hidden also pauses the game.
+  const syncActive = () => ZD.audio.setActive(!document.hidden && document.hasFocus());
   document.addEventListener('visibilitychange', () => {
     if (document.hidden && !ZD.game.paused) ZD.game.togglePause();
+    syncActive();
   });
+  window.addEventListener('blur', syncActive);
+  window.addEventListener('focus', syncActive);
+  window.addEventListener('pagehide', () => ZD.audio.setActive(false));
+  window.addEventListener('pageshow', syncActive);
   // keep the audio context alive after the first gesture on iOS
   window.addEventListener('pointerdown', () => ZD.audio.unlock(), { once: true });
 

@@ -565,7 +565,7 @@ button { font-family: inherit; }
 .overlay.visible { display: flex; }
 .overlay.pass { pointer-events: none; }
 .overlay.pass > * { pointer-events: auto; }
-.overlay.lesson, .overlay.pause, .overlay.complete { background: rgba(14, 8, 30, 0.78); }
+.overlay.pause, .overlay.complete { background: rgba(14, 8, 30, 0.78); }
 .overlay.gameover { background-size: cover; background-position: center; }
 .overlay.gameover::before { content: ''; position: absolute; inset: 0; background: rgba(20, 8, 40, 0.45); }
 
@@ -641,14 +641,6 @@ button { font-family: inherit; }
   box-shadow: 0 6px 0 #7a1020;
 }
 
-/* lesson */
-.lesson-wrap { display: flex; gap: 60px; align-items: center; padding: 40px; width: 1760px; }
-.lesson-stage { flex: 0 0 560px; display: flex; justify-content: center; align-items: center; gap: 30px; }
-.lesson-wrap.two .lesson-stage { flex-basis: 860px; }
-.lesson-text { flex: 1; color: #fff; }
-.lesson-title { font-family: var(--display); font-size: 40px; color: var(--yellow); opacity: 0.9; }
-.lesson-concept { font-family: var(--display); font-size: 92px; line-height: 1; margin: 14px 0; text-shadow: 0 6px 0 rgba(0, 0, 0, 0.4); min-height: 96px; }
-.lesson-sub { font-size: 30px; font-weight: 700; line-height: 1.35; max-width: 900px; }
 .teach { touch-action: none; overflow: visible; }
 .teach-label { font-family: var(--display); font-size: 42px; fill: #fff; paint-order: stroke; stroke: var(--ink); stroke-width: 8px; }
 .teach-small { font: 800 22px var(--body); fill: #fff; paint-order: stroke; stroke: var(--ink); stroke-width: 6px; }

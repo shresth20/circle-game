@@ -66,8 +66,7 @@ window.ZD = window.ZD || {};
         world.classList.add('alarm');
         ZD.audio.play('siren');
         const horde = side.spawnHorde(3);
-        ZD.ui.caption('intro1Title', { speak: false, big: true });
-        I18n.say('intro1Vo');
+        ZD.ui.caption('intro1Title', { big: true });
         const o = { v: 0 };
         const hordeAnim = anime({ targets: o, v: 1, duration: D(3600), easing: 'easeOutSine', update: () => {
           horde.forEach((z, i) => z.setPos(2000 + i * 230 - o.v * (560 + i * 40), side.groundY + 4 - i * 6));
@@ -77,7 +76,7 @@ window.ZD = window.ZD || {};
         side.hero.play({ sheet: 'hero.sideFear', fps: 14 }).then(() => !skipped && side.hero.setFrame(11));
         await step(wait(D(1200)));
         if (skipped) throw 'skip';
-        ZD.ui.caption('intro1Vo', { speak: false });
+        ZD.ui.caption('intro1Vo');
         await step(wait(D(2200)));
         if (skipped) throw 'skip';
         hordeAnim.pause();
@@ -125,7 +124,6 @@ window.ZD = window.ZD || {};
         anime({ targets: map, opacity: [0, 1], duration: D(500), easing: 'linear' });
         anime({ targets: chain.children, scale: [0, 1], opacity: [0, 1], duration: D(500), delay: anime.stagger(170, { start: 300 }), easing: 'easeOutBack' });
         anime({ targets: startBtn, scale: [0.6, 1], opacity: [0, 1], duration: D(600), delay: 1600, easing: 'easeOutElastic(1, .6)' });
-        I18n.say('intro3Vo');
         [0, 1, 2, 3].forEach((i) => ZD.clock.timeout(() => ZD.audio.play('pop'), 300 + i * 170));
         await step(new Promise((res) => startBtn.addEventListener('click', () => {
           ZD.audio.play('unlock');
@@ -135,7 +133,6 @@ window.ZD = window.ZD || {};
         if (e !== 'skip') throw e;
       }
       // cleanup
-      ZD.audio.stopSpeech();
       world.classList.remove('alarm');
       side.clearHorde();
       side.wall.root.style.display = '';

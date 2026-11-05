@@ -180,8 +180,8 @@ window.ZD = window.ZD || {};
       if (!b.classList.contains('visible')) return Promise.resolve();
       return anime({ targets: b, opacity: 0, translateY: 20, duration: 220, easing: 'easeInQuad' }).finished.then(() => b.classList.remove('visible'));
     },
-    /* Caption by i18n key; narrates the same key unless speak:false. */
-    caption(key, { speak = true, big = false } = {}) {
+    /* On-screen caption by i18n key (text only, no narration). */
+    caption(key, { big = false } = {}) {
       const c = this.captionEl;
       c.innerHTML = '';
       if (!key) {
@@ -191,7 +191,6 @@ window.ZD = window.ZD || {};
       c.className = 'caption visible' + (big ? ' big' : '');
       c.appendChild(el('span', { text: T(key) }));
       anime({ targets: c, opacity: [0, 1], translateY: [16, 0], duration: 380, easing: 'easeOutCubic' });
-      if (speak) I18n.say(key);
     },
 
     /* ---------------- generic overlay panel ---------------- */
@@ -259,7 +258,6 @@ window.ZD = window.ZD || {};
           ZD.audio.setMuted(!v);
           this._syncMute();
         }),
-        toggle(T('pauseVoice'), () => ZD.audio.voiceEnabled, (v) => ZD.audio.setVoice(v)),
         toggle(T('pauseMotion'), () => ZD.scene.settings.reducedMotion, (v) => ZD.scene.setReducedMotion(v)),
       ]);
       return this.panel({

@@ -1,6 +1,8 @@
-/* Procedural sound effects + optional speech narration.
+/* Procedural sound effects (no voice-over).
    Everything is synthesised with WebAudio, so the game needs no audio files
-   and works offline. Replace any effect by editing the recipe in SFX below. */
+   and works offline. Replace any effect by editing the recipe in SFX below.
+   Audio is silenced while the page is inactive (tab hidden / window blurred):
+   see setActive(), driven from main.js. */
 window.ZD = window.ZD || {};
 
 (function () {
@@ -10,7 +12,7 @@ window.ZD = window.ZD || {};
   let ambientNodes = null;
   const state = {
     muted: ZD.prefs.get('muted', false),
-    voice: ZD.prefs.get('voice', true),
+    active: !document.hidden,
     ready: false,
   };
 
@@ -246,16 +248,13 @@ window.ZD = window.ZD || {};
     get muted() {
       return state.muted;
     },
-    get voiceEnabled() {
-      return state.voice;
-    },
     get ready() {
       return state.ready;
     },
     /* Call from a user gesture (tap) to unlock audio on mobile browsers. */
     unlock() {
       if (!ensure()) return;
-      if (ctx.state === 'suspended') ctx.resume();
+      if (state.active && ctx.state === 'suspended') ctx.resume();
       // silent buffer kick for iOS
       const b = ctx.createBuffer(1, 1, 22050);
       const s = ctx.createBufferSource();
@@ -264,7 +263,7 @@ window.ZD = window.ZD || {};
       s.start(0);
     },
     play(name) {
-      if (!ensure() || state.muted) return;
+      if (!state.active || !ensure() || state.muted) return;
       if (ctx.state === 'suspended') ctx.resume();
       const fx = SFX[name];
       if (fx) fx();
@@ -273,38 +272,19 @@ window.ZD = window.ZD || {};
       state.muted = m;
       ZD.prefs.set('muted', m);
       if (master) master.gain.setTargetAtTime(m ? 0 : 0.9, now(), 0.02);
-      if (m) audio.stopSpeech();
+    },
+    /* Page focus: inactive -> suspend the whole audio graph (ambient loop
+       included) and drop new effects; active -> resume where it left off. */
+    setActive(on) {
+      state.active = on;
+      if (!ctx) return;
+      if (on) {
+        if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+      } else if (ctx.state === 'running') {
+        ctx.suspend().catch(() => {});
+      }
     },
     ambient,
-    setVoice(v) {
-      state.voice = v;
-      ZD.prefs.set('voice', v);
-      if (!v) audio.stopSpeech();
-    },
-    /* Narration through the browser speech engine (captions are always shown). */
-    say(text) {
-      if (!state.voice || state.muted || !('speechSynthesis' in window) || !text) return;
-      try {
-        speechSynthesis.cancel();
-        const u = new SpeechSynthesisUtterance(text);
-        u.lang = (window.I18n && I18n.langCode) || 'en-US';
-        u.rate = 1.0;
-        u.pitch = 1.0;
-        u.volume = 0.9;
-        speechSynthesis.speak(u);
-      } catch (e) {
-        /* ignore */
-      }
-    },
-    stopSpeech() {
-      if ('speechSynthesis' in window) {
-        try {
-          speechSynthesis.cancel();
-        } catch (e) {
-          /* ignore */
-        }
-      }
-    },
   };
 
   ZD.audio = audio;

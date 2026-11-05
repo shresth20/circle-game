@@ -21,11 +21,11 @@ once loaded. Best on a landscape tablet; it scales to any 16:9 → 20:9 screen.
 
 ```
 index.html                 shell: stage, HUD, overlays, script order
-css/style.css              all styling (HUD, options, lessons, panels, fx)
+css/style.css              all styling (HUD, options, panels, fx)
 js/
   i18n.js                  game-i18n: T('key'), data-i18n, I18n.say (voice by key)
   core/util.js             DOM helpers, pausable clock, prefs
-  core/audio.js            procedural SFX (WebAudio) + speech narration
+  core/audio.js            procedural SFX (WebAudio); silent while page is inactive
   core/assets.js           manifest access + preloader
   core/sprites.js          sprite-sheet animator (one rAF ticker)
   config/missions.js       missions → walls → challenges (data only)
@@ -33,7 +33,7 @@ js/
   scene.js                 front & side parallax scenes, glass mechanism,
                            projectile, effects, camera transitions
   ui.js                    HUD, prompt, answer options, stamps, panels
-  learn.js                 Encounter / Manipulate / primers / demonstration
+  learn.js                 circle diagrams + game-over demonstration
   intro.js                 title + 3-scene cinematic
   game.js                  state machine (wall loop, outcomes, finale)
   main.js                  boot + viewport fitting
@@ -89,34 +89,34 @@ All learning content is data in `js/config/missions.js`:
 * `C(piece)` builds the complementary piece (minor ↔ major distractor).
 * A wall's `level` is `'basic'` (ARC/SECTOR/SEGMENT labels, type-only match)
   or `'full'` (MINOR/MAJOR labels, type + size must match).
-* A wall's `lesson` is `'encounter'` (full Encounter → Manipulate lesson),
-  `'minorMajor'`, `'segments'`, or `null`.
 * Append a mission object to `ZD.MISSIONS` to add a 3-wall mission; the
   finale shows **Next mission** automatically.
 
 Correctness is evaluated by `ZD.geo.matches(option, target, level)` from this
 data — never from pixels — and the same `ZD.geo.piecePath` draws the wall
-opening, the projectile, the option thumbnails and the lesson diagrams.
+opening, the projectile, the option thumbnails and the game-over diagram.
 
 ## Localisation (game-i18n)
 
 Every learner-facing line is a key: `T('fbCorrect')` in JS, `data-i18n="appTitle"`
-in HTML, `I18n.say('intro1Vo')` for narration; generated keys use
+in HTML; generated keys use
 `I18n.key('piece', 'minor', 'sector')` → `pieceMinorSector`. `locales/locales.json`
 holds the English text only. Add a language by adding `"hi": {…}` next to `"en"`
 and open `index.html?lan=hi` (missing keys fall back to English, then show the
 key itself). After editing the JSON, regenerate `locales/locales.js` (command in
 the header of `js/i18n.js`) so the game still runs from `file://`.
 
-Voice-over: drop `assets/VO/<lang>/<key>.webm` and list the key in
-`assets/VO/<lang>/manifest.json`; unlisted keys are spoken by the browser's
-speech engine (language codes in `js/i18n.js`).
+There is no voice-over: learners already know the parts of a circle, so the
+game has no lessons or narration — only on-screen text. (`I18n.say` remains in
+`js/i18n.js` but nothing calls it.)
 
 ## Audio
 
 All sound effects are synthesised in `js/core/audio.js` (`SFX` recipes), so
-no audio files are required. Toggle sound (M key / HUD button), voice
-narration and reduced motion from the pause menu (Esc / P).
+no audio files are required. Toggle sound (M key / HUD button) and reduced
+motion from the pause menu (Esc / P). When the tab is hidden or the window
+loses focus, the AudioContext is suspended (`ZD.audio.setActive`, wired in
+`js/main.js`) — no ambient loop or effects play until the learner returns.
 
 ## Visual consistency
 

@@ -35,7 +35,6 @@ window.ZD = window.ZD || {};
         {
           id: 'w1',
           titleKey: 'wallIntro1',
-          lesson: 'encounter', // full Encounter -> Manipulate lesson before this wall
           level: 'basic', // labels: ARC / SECTOR / SEGMENT
           challenges: [
             { mode: 'shape', target: P('sector', -35, 100), options: [P('arc', -35, 100), P('sector', -35, 100), P('segment', -35, 100)] },
@@ -48,7 +47,6 @@ window.ZD = window.ZD || {};
         {
           id: 'w2',
           titleKey: 'wallIntro2',
-          lesson: 'minorMajor',
           level: 'full',
           challenges: [
             { mode: 'shape', target: P('sector', 40, 240), options: [C(P('sector', 40, 240)), P('sector', 40, 240), P('arc', 40, 240)] },
@@ -62,7 +60,6 @@ window.ZD = window.ZD || {};
         {
           id: 'w3',
           titleKey: 'wallIntro3',
-          lesson: 'segments',
           level: 'full',
           challenges: [
             { mode: 'shape', target: P('segment', 30, 120), options: [P('segment', 30, 120, 40), P('sector', 30, 120, -30), P('chord', 30, 120, 20), P('arc', 30, 120, 60)] },
@@ -83,7 +80,6 @@ window.ZD = window.ZD || {};
         {
           id: 'w1',
           titleKey: 'wallIntro2',
-          lesson: null,
           level: 'full',
           challenges: [
             { mode: 'identify', target: P('arc', 300, 120), options: [P('arc', 300, 120), C(P('arc', 300, 120)), P('sector', 300, 120), P('segment', 300, 120)] },
@@ -94,7 +90,6 @@ window.ZD = window.ZD || {};
         {
           id: 'w2',
           titleKey: 'wallIntro3',
-          lesson: null,
           level: 'full',
           challenges: [
             { mode: 'identify', target: P('sector', 200, 260), options: [P('sector', 200, 260), C(P('sector', 200, 260)), P('segment', 200, 260), P('arc', 200, 260)] },
@@ -105,7 +100,6 @@ window.ZD = window.ZD || {};
         {
           id: 'w3',
           titleKey: 'wallIntro3',
-          lesson: null,
           level: 'full',
           challenges: [
             { mode: 'identify', target: P('segment', 240, 110), options: [P('segment', 240, 110), P('sector', 240, 110), C(P('segment', 240, 110)), P('chord', 240, 110)] },
