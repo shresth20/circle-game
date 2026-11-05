@@ -1,4 +1,7 @@
-/* Title screen + 3-scene cinematic opening (skippable). */
+/* Title screen + 3-scene cinematic opening (skippable).
+   Scene 2 shows the rules with the real game sequences: wrong piece -> the
+   zombie breaks in through the circle; right piece -> zombie down, the hero
+   jumps through the circle. */
 window.ZD = window.ZD || {};
 
 (function () {
@@ -81,7 +84,7 @@ window.ZD = window.ZD || {};
         if (skipped) throw 'skip';
         hordeAnim.pause();
 
-        /* Scene 2 - the hero and the wall */
+        /* Scene 2 - the wall is fixed in the ground; show both outcomes */
         world.classList.remove('alarm');
         await step(anime({ targets: horde.map((z) => z.el), opacity: 0, duration: D(400), easing: 'linear' }).finished);
         side.clearHorde();
@@ -93,11 +96,37 @@ window.ZD = window.ZD || {};
         side.zombie.setPos(side.zombieHome.x, side.zombieHome.y);
         side.zombie.play({ sheet: 'zombie.side.idle', fps: 7, loop: true });
         side.hero.play({ sheet: 'hero.sideIdle', fps: 9, loop: true });
-        anime({ targets: side.wall.root, translateX: [400, 0], opacity: [0, 1], duration: D(700), easing: 'easeOutCubic' });
         ZD.ui.caption('intro2Vo');
-        await step(wait(D(1600)));
+        await step(wait(D(2600)));
         if (skipped) throw 'skip';
-        await step(ZD.game.sideThrowDemo(demo));
+
+        // wrong piece: the glass breaks and the zombie dives through the circle
+        ZD.ui.caption('intro2Wrong');
+        await step(wait(D(1200)));
+        if (skipped) throw 'skip';
+        await step(ZD.game.sideThrowDemo({ type: 'arc', start: -50, sweep: 100 }, false));
+        if (skipped) throw 'skip';
+        world.classList.add('alarm');
+        await step(ZD.game.zombieBreakIn());
+        if (skipped) throw 'skip';
+        await step(wait(D(700)));
+        if (skipped) throw 'skip';
+        await step(ZD.game.securityReset(demo));
+        if (skipped) throw 'skip';
+        await step(wait(D(600)));
+        if (skipped) throw 'skip';
+
+        // right piece: it passes the circle, knocks the zombie out, and the
+        // hero jumps through to the next wall
+        ZD.ui.caption('intro2Right');
+        await step(wait(D(1200)));
+        if (skipped) throw 'skip';
+        await step(ZD.game.sideThrowDemo(demo, true));
+        if (skipped) throw 'skip';
+        await step(side.wall.glass.unlock());
+        if (skipped) throw 'skip';
+        ZD.audio.play('unlock');
+        await step(ZD.game.heroJumpThrough());
         if (skipped) throw 'skip';
         await step(wait(D(900)));
         if (skipped) throw 'skip';
@@ -132,8 +161,21 @@ window.ZD = window.ZD || {};
       } catch (e) {
         if (e !== 'skip') throw e;
       }
-      // cleanup
+      // cleanup: a skip can land mid-animation, so stop the demo's tweens
+      if (skipped) {
+        anime.running.slice().forEach((a) => {
+          if (!a.loop) a.pause();
+        });
+      }
       world.classList.remove('alarm');
+      side.showCover(false);
+      side.hero.setRotation(0);
+      side.hero.el.style.opacity = '';
+      side.zombie.setRotation(0);
+      side.zombie.setFlip(false);
+      side.zombie.el.style.opacity = '';
+      side.projectile.el.style.transform = '';
+      side.projectile.el.style.opacity = '';
       side.clearHorde();
       side.wall.root.style.display = '';
       side.wall.root.style.opacity = '';

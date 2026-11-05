@@ -112,6 +112,7 @@ button { font-family: inherit; }
 }
 .wall-side { filter: var(--f-wall) drop-shadow(-18px 10px 14px rgba(20, 0, 40, 0.45)); }
 .wall-slot { position: absolute; inset: 0; pointer-events: none; }
+.wall-cover { position: absolute; overflow: visible; pointer-events: none; filter: var(--f-wall); }
 .interior {
   position: absolute;
   border-radius: 50%;

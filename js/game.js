@@ -103,6 +103,7 @@ window.ZD = window.ZD || {};
       side.zombieOffset = 0;
       side.setScroll(0);
       side.zombie.setPos(side.zombieHome.x, side.zombieHome.y);
+      side.showCover(false);
       side.idle();
     },
 
@@ -333,17 +334,31 @@ window.ZD = window.ZD || {};
       }
     },
 
-    /* Demo throw used by the intro (side camera, always correct). */
-    async sideThrowDemo(spec) {
+    /* Demo throw used by the intro (side camera).  Correct: the piece passes
+       the circle and knocks the zombie out.  Wrong: it bounces off and cracks
+       the glass. */
+    async sideThrowDemo(spec, correct = true) {
       const { side } = ZD.scene;
       const P = side.projectile;
       P.setSpec(spec, 0);
-      side.hero.play({ sheet: 'hero.sideThrow', fps: 18 });
+      side.hero.play({ sheet: 'hero.sideThrow', fps: 18 }).then(() => side.hero.play({ sheet: 'hero.sideIdle', fps: 9, loop: true }));
       await wait(7 / 18 * 1000);
       ZD.audio.play('whoosh');
       const from = side.heroHand;
       const to = { x: side.hole.x, y: side.hole.y };
       await P.fly({ from, to, ctrl: { x: (from.x + to.x) / 2, y: to.y - 90 }, duration: D(650), easing: 'easeInSine', scaleFrom: 1.0, scaleTo: 0.8, sxFrom: 0.9, sxTo: 0.45, rotTo: 0, spin: 10 });
+      if (!correct) {
+        side.wall.glass.highlight('bad');
+        side.wall.glass.crack(0, 0);
+        ZD.audio.play('crack');
+        fx().shards(side.fxLayer, to.x, to.y, 12);
+        fx().shake(8, 300);
+        await anime({ targets: P.el, translateX: '-=160', translateY: '+=300', rotate: '-=140', opacity: [1, 0], duration: D(520), easing: 'easeInQuad' }).finished;
+        P.el.style.transform = '';
+        P.el.style.opacity = '';
+        P.show(false);
+        return;
+      }
       side.wall.glass.highlight('good');
       ZD.audio.play('pass');
       fx().sparkles(side.fxLayer, to.x, to.y, 12, '#c7ffd8');
@@ -351,8 +366,7 @@ window.ZD = window.ZD || {};
       await this.zombieHit();
       side.hero.play({ sheet: 'hero.sideCheer', fps: 12 }).then(() => side.hero.play({ sheet: 'hero.sideIdle', fps: 9, loop: true }));
       ZD.audio.play('yay');
-      await wait(D(600));
-      side.wall.glass.highlight('idle');
+      await wait(D(500));
     },
 
     async sideFlightToZombie(P) {
@@ -404,89 +418,144 @@ window.ZD = window.ZD || {};
       ZD.audio.play('yay');
       fx().sparkles(side.fxLayer, side.hero.x, side.hero.y - 200, 14);
       ZD.ui.showBanner(`${T('fbCorrect')} — ${label}`, null, 'good');
-      side.wall.glass.unlock().then(() => ZD.audio.play('unlock'));
-      await wait(D(1800));
+      await side.wall.glass.unlock();
+      ZD.audio.play('unlock');
+      this.guard(E);
+      await this.heroJumpThrough();
       this.guard(E);
       await ZD.ui.hideBanner();
     },
 
+    /* The circle is open: the defeated zombie fades, the hero runs at the wall
+       and dives through the circle to the far side. */
+    async heroJumpThrough() {
+      const { side } = ZD.scene;
+      const hero = side.hero;
+      anime({ targets: side.zombie.el, opacity: 0, duration: D(500), easing: 'easeInQuad' });
+      const takeoff = side.hole.x - 330;
+      const landing = side.hole.x + 330;
+      hero.play({ sheet: 'hero.sideRun', fps: 16, loop: true });
+      const run = { x: hero.x };
+      const steps = setInterval(() => ZD.audio.play('step'), 200);
+      await anime({ targets: run, x: takeoff, duration: D(650), easing: 'easeInQuad', update: () => hero.setPos(run.x, side.heroHome.y) }).finished;
+      clearInterval(steps);
+      // crouch + spring
+      await hero.play({ sheet: 'hero.sideJump', fps: 20, from: 0, to: 2 });
+      ZD.audio.play('swoosh');
+      hero.play({ sheet: 'hero.sideJump', fps: 7, from: 3, to: 8 });
+      side.showCover(true);
+      await side.leapThrough(hero, { x0: takeoff, x1: landing, y: side.heroHome.y, core: side.heroCore, duration: 850, onCross: () => fx().sparkles(side.fxLayer, side.hole.x, side.hole.y, 10, '#c7ffd8') });
+      side.showCover(false);
+      ZD.audio.play('thud');
+      fx().puffs(side.fxLayer, landing, side.heroHome.y - 10, 6);
+      await hero.play({ sheet: 'hero.sideJump', fps: 16, from: 9, to: 11 });
+      hero.play({ sheet: 'hero.sideIdle', fps: 9, loop: true });
+    },
+
     /* ------------------------------------------------- side: wrong path */
     async wrongSide(target, hint, alive, E) {
-      const { side } = ZD.scene;
-      const z = side.zombie;
-      const hero = side.hero;
-      side.wall.glass.crack(0, 0);
       document.getElementById('world').classList.add('alarm');
-      ZD.audio.play('alarm');
-      // zombie charges the wall
-      z.play({ sheet: 'zombie.side.run', fps: 14, loop: true });
-      ZD.audio.play('groan');
-      const wallX = side.hole.x + 60;
-      const o = { x: z.x };
-      await anime({ targets: o, x: wallX, duration: D(820), easing: 'easeInQuad', update: () => z.setPos(o.x, z.y) }).finished;
+      await this.zombieBreakIn(E, () => ZD.ui.loseHeart(this.hearts)); // index of the heart just lost
       this.guard(E);
-      // breaks through
-      side.wall.glass.shatter();
-      ZD.audio.play('shatter');
-      fx().shards(side.fxLayer, side.hole.x, side.hole.y, 18, ['#bfe9ff', '#ffffff', '#ff8aa0', '#e0a070']);
-      fx().shake(14, 500);
-      fx().flash('#ff3b5c', 300, 0.35);
-      ZD.ui.stamp(T('fbBreached'), 'breach', 900);
-      hero.play({ sheet: 'hero.sideFear', fps: 14 }).then(() => hero.setFrame(11));
-      ZD.audio.play('scream');
-      const attackX = side.heroHome.x + 150;
-      await anime({ targets: o, x: attackX, duration: D(700), easing: 'easeInOutQuad', update: () => z.setPos(o.x, z.y) }).finished;
-      this.guard(E);
-      // attack + hero knocked
-      const atk = z.play({ sheet: 'zombie.side.attack', fps: 16 });
-      await wait(D(380));
-      ZD.audio.play('thud');
-      fx().puffs(side.fxLayer, hero.x + 40, hero.y - 150, 6);
-      fx().shake(10, 400);
-      const ho = { x: hero.x };
-      anime({ targets: ho, x: hero.x - 70, duration: D(380), easing: 'easeOutQuad', update: () => hero.setPos(ho.x, hero.y) });
-      hero.play({ sheet: 'hero.sideJump', fps: 14, from: 0, to: 5 }).then(() => hero.setFrame(5));
-      ZD.ui.loseHeart(this.hearts); // index of the heart just lost
-      await atk;
-      this.guard(E);
-
       if (alive) {
-        // security reset: zombie pushed back through the wall, glass restored
         ZD.ui.showBanner(T('fbWrong'), hint, 'bad');
-        await wait(D(600));
+        await wait(D(1600));
         this.guard(E);
-        ZD.audio.play('unlock');
-        fx().flash('#9ad8ff', 400, 0.4);
-        fx().ring(side.fxLayer, side.hole.x, side.hole.y, '#9ad8ff', 120);
-        z.play({ sheet: 'zombie.side.hit', fps: 14 }).then(() => z.play({ sheet: 'zombie.side.idle', fps: 7, loop: true }));
-        const back = { x: z.x };
-        anime({ targets: back, x: side.zombieHome.x, duration: D(900), easing: 'easeInOutQuad', update: () => z.setPos(back.x, z.y) });
-        hero.play({ sheet: 'hero.sideIdle', fps: 9, loop: true });
-        anime({ targets: ho, x: side.heroHome.x, duration: D(500), easing: 'easeOutQuad', update: () => hero.setPos(ho.x, hero.y) });
-        await wait(D(500));
-        side.wall.glass.restore();
-        side.setTarget(target);
-        document.getElementById('world').classList.remove('alarm');
-        await wait(D(2000));
+        await this.securityReset(target, E);
+        this.guard(E);
+        await wait(D(1400));
         this.guard(E);
         await ZD.ui.hideBanner();
         ZD.ui.showBanner(T('fbReset'), null, 'info');
         await wait(D(900));
         await ZD.ui.hideBanner();
       } else {
-        // defeat (cartoon): hero topples, stars, zombie looms
+        // defeat (cartoon): the hero stays down, the zombie looms
         ZD.audio.play('gameover');
-        z.play({ sheet: 'zombie.side.attack', fps: 12, loop: true });
-        // topple backwards, pivoting on the feet; keep the feet far enough right
-        // that the head stays on stage
-        anime({ targets: ho, x: side.heroHome.x + 60, duration: D(600), easing: 'easeOutQuad', update: () => hero.setPos(ho.x, hero.y) });
-        const rot = { r: 0 };
-        anime({ targets: rot, r: -84, duration: D(700), easing: 'easeInBack', update: () => hero.setRotation(rot.r) });
-        hero.setFrame(5);
-        fx().stars(side.fxLayer, side.heroHome.x - 120, hero.y - 90, 5, 2400);
+        ZD.scene.side.zombie.play({ sheet: 'zombie.side.attack', fps: 12, loop: true });
         await wait(D(1900));
         this.guard(E);
       }
+    },
+
+    /* Wrong piece: the glass shatters as the zombie dives through the circle,
+       lands on the hero's side and knocks the hero out. */
+    async zombieBreakIn(E, onHit) {
+      const { side } = ZD.scene;
+      const z = side.zombie;
+      const hero = side.hero;
+      const glass = side.wall.glass;
+      glass.crack(0, 0);
+      ZD.audio.play('alarm');
+      ZD.audio.play('groan');
+      side.showCover(true);
+      // charge at the wall from behind it
+      z.play({ sheet: 'zombie.side.run', fps: 16, loop: true });
+      const runTo = side.hole.x + 300;
+      const o = { x: z.x };
+      await anime({ targets: o, x: runTo, duration: D(520), easing: 'easeInQuad', update: () => z.setPos(o.x, side.zombieHome.y) }).finished;
+      if (E != null) this.guard(E);
+      hero.play({ sheet: 'hero.sideFear', fps: 14 }).then(() => hero.setFrame(11));
+      // dive through the circle - the glass breaks as the head hits it
+      const landX = side.heroHome.x + 260;
+      await side.leapThrough(z, { x0: runTo, x1: landX, y: side.zombieHome.y, core: side.zombieCore, duration: 900, onCross: () => {
+        glass.shatter();
+        ZD.audio.play('shatter');
+        fx().shards(side.fxLayer, side.hole.x, side.hole.y, 18, ['#bfe9ff', '#ffffff', '#ff8aa0', '#e0a070']);
+        fx().shake(14, 500);
+        fx().flash('#ff3b5c', 300, 0.35);
+        ZD.ui.stamp(T('fbBreached'), 'breach', 900);
+        ZD.audio.play('scream');
+      } });
+      side.showCover(false);
+      if (E != null) this.guard(E);
+      ZD.audio.play('thud');
+      fx().puffs(side.fxLayer, landX, side.zombieHome.y - 10, 6);
+      // attack: the hero is knocked flat
+      const atk = z.play({ sheet: 'zombie.side.attack', fps: 16 });
+      await wait(D(380));
+      if (E != null) this.guard(E);
+      ZD.audio.play('thud');
+      fx().puffs(side.fxLayer, hero.x + 40, hero.y - 150, 6);
+      fx().shake(10, 400);
+      onHit && onHit();
+      hero.play({ sheet: 'hero.sideJump', fps: 14, from: 0, to: 5 }).then(() => hero.setFrame(5));
+      const ho = { x: hero.x, r: 0 };
+      anime({ targets: ho, x: side.heroHome.x + 90, duration: D(600), easing: 'easeOutQuad', update: () => hero.setPos(ho.x, side.heroHome.y) });
+      anime({ targets: ho, r: -84, duration: D(650), easing: 'easeInBack', update: () => hero.setRotation(ho.r) });
+      fx().stars(side.fxLayer, side.heroHome.x - 120, side.heroHome.y - 90, 5, 2400);
+      await atk;
+    },
+
+    /* Security reset after a breach: a shock pulse throws the zombie back
+       through the circle, the glass reforms and the hero gets back up. */
+    async securityReset(target, E) {
+      const { side } = ZD.scene;
+      const z = side.zombie;
+      const hero = side.hero;
+      ZD.audio.play('unlock');
+      fx().flash('#9ad8ff', 400, 0.4);
+      fx().ring(side.fxLayer, z.x, z.y - 120, '#9ad8ff', 120);
+      await z.play({ sheet: 'zombie.side.hit', fps: 16 });
+      if (E != null) this.guard(E);
+      z.setFlip(true);
+      z.play({ sheet: 'zombie.side.run', fps: 16, loop: true });
+      ZD.audio.play('swoosh');
+      side.showCover(true);
+      const up = { r: hero.rot || 0 };
+      anime({ targets: up, r: 0, duration: D(600), delay: D(300), easing: 'easeOutBack', update: () => hero.setRotation(up.r) });
+      const back = { x: hero.x };
+      anime({ targets: back, x: side.heroHome.x, duration: D(500), delay: D(300), easing: 'easeOutQuad', update: () => hero.setPos(back.x, side.heroHome.y) });
+      await side.leapThrough(z, { x0: z.x, x1: side.zombieHome.x, y: side.zombieHome.y, core: side.zombieCore, duration: 850 });
+      side.showCover(false);
+      if (E != null) this.guard(E);
+      z.setFlip(false);
+      z.play({ sheet: 'zombie.side.idle', fps: 7, loop: true });
+      hero.play({ sheet: 'hero.sideIdle', fps: 9, loop: true });
+      side.wall.glass.restore();
+      side.setTarget(target);
+      fx().ring(side.fxLayer, side.hole.x, side.hole.y, '#9ad8ff', 120);
+      document.getElementById('world').classList.remove('alarm');
     },
 
     /* ------------------------------------------------------ transition */

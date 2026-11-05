@@ -17,6 +17,24 @@ python3 -m http.server 8080        # then open http://localhost:8080
 Everything is local (fonts, anime.js, generated WebP art) so it works offline
 once loaded. Best on a landscape tablet; it scales to any 16:9 → 20:9 screen.
 
+## How a wall plays out
+
+The wall is fixed in the ground; the learner picks the circle piece that fits
+its glass window (front view), then the outcome plays on the side view:
+
+* **Right piece** - it passes the window and knocks the zombie out; the glass
+  opens and the hero dives through the circle to the far side, then runs on
+  to the next wall.
+* **Wrong piece** - the glass cracks, the zombie dives through the circle,
+  shattering it, and knocks the hero out (one heart lost).  A security pulse
+  throws the zombie back through the circle and the hero gets up.  No hearts
+  left -> game over.
+
+The intro shows both outcomes with the same code (`ZD.game.sideThrowDemo`,
+`zombieBreakIn`, `securityReset`, `heroJumpThrough`).  Leaps use
+`SideScene.leapThrough` plus a wall "cover" layer so whatever has passed the
+wall is hidden by bricks and seen only through the hole.
+
 ## Project layout
 
 ```

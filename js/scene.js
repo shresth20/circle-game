@@ -561,6 +561,20 @@ window.ZD = window.ZD || {};
 
       this.hole = { x: this.wallHome + this.holeOffset.x, y: this.groundY - this.wallH + this.holeOffset.y };
 
+      // Depth cover for leaps through the circle: a copy of the wall's far half
+      // (right of the hole centre), drawn above the characters.  Whatever has
+      // passed the wall plane is hidden by bricks and seen only through the
+      // (transparent) hole.  Shown only while someone goes through the wall.
+      this.cover = svg('svg', { class: 'wall-cover', width: this.wallW, height: this.wallH, viewBox: `0 0 ${this.wallW} ${this.wallH}` });
+      Object.assign(this.cover.style, { left: this.wallHome + 'px', top: this.groundY - this.wallH + 'px', zIndex: 21, display: 'none' });
+      const cm = svg('mask', { id: 'wall-cover-m' });
+      cm.append(svg('rect', { x: this.holeOffset.x, y: 0, width: this.wallW, height: this.wallH, fill: 'white' }));
+      this.cover.append(svg('defs', {}, [cm]), svg('image', { href: A.wallUrl('angle1'), width: this.wallW, height: this.wallH, preserveAspectRatio: 'none', mask: 'url(#wall-cover-m)' }));
+      this.el.appendChild(this.cover);
+      // feet -> body-centre distance (scaled px), measured from the sheets
+      this.heroCore = 150;
+      this.zombieCore = 120;
+
       // characters
       this.heroHome = { x: 330, y: this.groundY };
       this.hero = new ZD.Sprite({ className: 'char-hero', zIndex: 20 });
@@ -631,6 +645,42 @@ window.ZD = window.ZD || {};
 
     zombieOffset = 0;
 
+    showCover(on) {
+      this.cover.style.display = on ? '' : 'none';
+      this.cover.style.transform = `translateX(${this.wall.offset - this.scrollX}px)`;
+    }
+
+    /* Leap a character head-first through the wall's circle.
+       Feet start at (x0, y) and land at (x1, y); the body centre follows a
+       parabola whose midpoint is the hole centre, rotating to horizontal
+       (dive) exactly as it crosses the wall.  onCross fires when the head
+       reaches the hole (glass break / whoosh).  Caller shows the cover. */
+    async leapThrough(sprite, { x0, x1, y, core, duration = 900, onCross } = {}) {
+      const dir = Math.sign(x1 - x0) || 1;
+      const H = this.hole;
+      const P0 = { x: x0, y: y - core };
+      const P2 = { x: x1, y: y - core };
+      const P1 = { x: 2 * H.x - (P0.x + P2.x) / 2, y: 2 * H.y - (P0.y + P2.y) / 2 };
+      const o = { t: 0 };
+      let crossed = false;
+      await anime({ targets: o, t: 1, duration: D(duration), easing: 'linear', update: () => {
+        const t = o.t;
+        const u = 1 - t;
+        const cx = u * u * P0.x + 2 * u * t * P1.x + t * t * P2.x;
+        const cy = u * u * P0.y + 2 * u * t * P1.y + t * t * P2.y;
+        const deg = dir * 90 * Math.sin(Math.PI * t);
+        const r = (deg * Math.PI) / 180;
+        sprite.setRotation(deg);
+        sprite.setPos(cx - core * Math.sin(r), cy + core * Math.cos(r));
+        if (!crossed && t >= 0.4) {
+          crossed = true;
+          onCross && onCross();
+        }
+      } }).finished;
+      sprite.setRotation(0);
+      sprite.setPos(x1, y);
+    }
+
     idle() {
       this.hero.play({ sheet: 'hero.sideIdle', fps: 9, loop: true });
       this.zombie.show(true);
@@ -655,10 +705,18 @@ window.ZD = window.ZD || {};
       } else {
         this.zombie.show(false);
       }
+      this.zombie.el.style.opacity = '';
       this.hero.play({ sheet: 'hero.sideRun', fps: 16, loop: true });
       const stepTimer = setInterval(() => ZD.audio.play('step'), 230);
+      // the hero may be on the far side of the wall (after jumping through):
+      // the camera catches up and the hero settles back at the home spot
+      const hx0 = this.hero.x;
+      const hx1 = this.heroHome.x;
       const o = { v: 0 };
-      await anime({ targets: o, v: distance, duration: D(duration), easing: 'easeInOutSine', update: () => this.setScroll(o.v) }).finished;
+      await anime({ targets: o, v: distance, duration: D(duration), easing: 'easeInOutSine', update: () => {
+        this.setScroll(o.v);
+        if (hx0 !== hx1) this.hero.setPos(hx0 + (hx1 - hx0) * (o.v / distance), this.heroHome.y);
+      } }).finished;
       clearInterval(stepTimer);
       // finalize: the new wall becomes current at the home position
       this.walls[this.cur].root.style.display = 'none';
