@@ -555,21 +555,43 @@ window.ZD = window.ZD || {};
       this.holeOffset = { x: wallDef.hole.cx * this.wallScale, y: wallDef.hole.cy * this.wallScale };
       this.holeRy = wallDef.hole.ry * this.wallScale;
       this.holeRx = wallDef.hole.rx * this.wallScale;
+
+      /* Plant the wall ON the road.  The angle1 art's base runs from its far
+         corner (x 0, y 506) down to its near corner (x 265, y 598) - steeper
+         than the narrow road strip (y ~803 back edge .. ~842 front edge).  So:
+         drop the wall until the near corner stands on the front edge, then
+         skew it vertically about that corner so the far corner lands on the
+         back edge.  Verticals stay vertical; the art and everything drawn on
+         it (glass, cover, hole target) share one transform. */
+      const roadBack = 803;
+      const roadFront = 842;
+      const near = { x: 265 * this.wallScale, y: 598 * this.wallScale };
+      const far = { x: 0, y: 506 * this.wallScale };
+      this.wallTop = roadFront - near.y;
+      this.skewOrigin = { x: this.wallHome + near.x, y: roadFront };
+      this.skewTan = (roadBack - (this.wallTop + far.y) - (roadFront - (this.wallTop + near.y))) / (far.x - near.x);
+      this.skewCss = `skewY(${(Math.atan(this.skewTan) * 180) / Math.PI}deg)`;
+      this.baseLine = { x0: this.wallHome + far.x, y0: roadBack, x1: this.skewOrigin.x, y1: roadFront };
+
       this.walls = [this._makeWall(), this._makeWall()];
       this.cur = 0;
       this.walls[1].root.style.display = 'none';
 
-      this.hole = { x: this.wallHome + this.holeOffset.x, y: this.groundY - this.wallH + this.holeOffset.y };
+      this.hole = this._skewPt(this.wallHome + this.holeOffset.x, this.wallTop + this.holeOffset.y);
 
       // Depth cover for leaps through the circle: a copy of the wall's far half
       // (right of the hole centre), drawn above the characters.  Whatever has
       // passed the wall plane is hidden by bricks and seen only through the
       // (transparent) hole.  Shown only while someone goes through the wall.
-      this.cover = svg('svg', { class: 'wall-cover', width: this.wallW, height: this.wallH, viewBox: `0 0 ${this.wallW} ${this.wallH}` });
-      Object.assign(this.cover.style, { left: this.wallHome + 'px', top: this.groundY - this.wallH + 'px', zIndex: 21, display: 'none' });
+      this.cover = el('div', { class: 'wall-cover-wrap', style: { zIndex: 21, display: 'none' } });
+      const coverSkew = this._skewBox();
+      const coverSvg = svg('svg', { class: 'wall-cover', width: this.wallW, height: this.wallH, viewBox: `0 0 ${this.wallW} ${this.wallH}` });
+      Object.assign(coverSvg.style, { left: this.wallHome + 'px', top: this.wallTop + 'px' });
       const cm = svg('mask', { id: 'wall-cover-m' });
       cm.append(svg('rect', { x: this.holeOffset.x, y: 0, width: this.wallW, height: this.wallH, fill: 'white' }));
-      this.cover.append(svg('defs', {}, [cm]), svg('image', { href: A.wallUrl('angle1'), width: this.wallW, height: this.wallH, preserveAspectRatio: 'none', mask: 'url(#wall-cover-m)' }));
+      coverSvg.append(svg('defs', {}, [cm]), svg('image', { href: A.wallUrl('angle1'), width: this.wallW, height: this.wallH, preserveAspectRatio: 'none', mask: 'url(#wall-cover-m)' }));
+      coverSkew.appendChild(coverSvg);
+      this.cover.appendChild(coverSkew);
       this.el.appendChild(this.cover);
       // feet -> body-centre distance (scaled px), measured from the sheets
       this.heroCore = 150;
@@ -605,11 +627,27 @@ window.ZD = window.ZD || {};
       this.setScroll(0);
     }
 
+    /* point in the wall's unskewed layout -> where it is drawn */
+    _skewPt(x, y) {
+      return { x, y: y + (x - this.skewOrigin.x) * this.skewTan };
+    }
+
+    /* full-stage box carrying the wall's skew */
+    _skewBox() {
+      return el('div', { class: 'wall-skew', style: { transformOrigin: `${this.skewOrigin.x}px ${this.skewOrigin.y}px`, transform: this.skewCss } });
+    }
+
     _makeWall() {
       const root = el('div', { class: 'wall-slot', style: { zIndex: 12 } });
-      const img = el('div', { class: 'wall-side', style: { left: this.wallHome + 'px', top: this.groundY - this.wallH + 'px', width: this.wallW + 'px', height: this.wallH + 'px', backgroundImage: `url("${A.wallUrl('angle1')}")` } });
-      const glass = new GlassMech({ cx: this.wallHome + this.holeOffset.x, cy: this.groundY - this.wallH + this.holeOffset.y, r: this.holeRy, squash: this.holeRx / this.holeRy });
-      root.append(img, glass.el);
+      // contact shadow on the road, along the wall's base
+      const b = this.baseLine;
+      const len = Math.hypot(b.x1 - b.x0, b.y1 - b.y0);
+      const shadow = el('div', { class: 'wall-shadow', style: { left: (b.x0 + b.x1) / 2 - len * 0.6 + 'px', top: (b.y0 + b.y1) / 2 - 16 + 'px', width: len * 1.2 + 'px', transform: `rotate(${(Math.atan2(b.y1 - b.y0, b.x1 - b.x0) * 180) / Math.PI}deg)` } });
+      const body = this._skewBox();
+      const img = el('div', { class: 'wall-side', style: { left: this.wallHome + 'px', top: this.wallTop + 'px', width: this.wallW + 'px', height: this.wallH + 'px', backgroundImage: `url("${A.wallUrl('angle1')}")` } });
+      const glass = new GlassMech({ cx: this.wallHome + this.holeOffset.x, cy: this.wallTop + this.holeOffset.y, r: this.holeRy, squash: this.holeRx / this.holeRy });
+      body.append(img, glass.el);
+      root.append(shadow, body);
       this.el.appendChild(root);
       return { root, img, glass, offset: 0 };
     }

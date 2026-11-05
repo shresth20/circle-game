@@ -113,6 +113,8 @@ button { font-family: inherit; }
 .wall-side { filter: var(--f-wall) drop-shadow(-18px 10px 14px rgba(20, 0, 40, 0.45)); }
 .wall-slot { position: absolute; inset: 0; pointer-events: none; }
 .wall-cover { position: absolute; overflow: visible; pointer-events: none; filter: var(--f-wall); }
+.wall-cover-wrap, .wall-skew { position: absolute; inset: 0; pointer-events: none; }
+.wall-shadow { position: absolute; height: 32px; border-radius: 50%; pointer-events: none; background: radial-gradient(ellipse at center, rgba(30, 6, 40, 0.55), rgba(30, 6, 40, 0) 70%); }
 .interior {
   position: absolute;
   border-radius: 50%;
