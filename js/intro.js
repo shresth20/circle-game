@@ -61,8 +61,11 @@ window.ZD = window.ZD || {};
       try {
         /* Scene 1 - the emergency */
         ZD.scene.camera.cut('side');
+        // the wall stands on the road from the first frame, between the hero
+        // and the horde
+        side.wall.root.style.display = '';
+        side.wall.glass.restore();
         side.setTarget(null);
-        side.wall.root.style.display = 'none';
         side.zombie.show(false);
         side.hero.play({ sheet: 'hero.sideIdle', fps: 9, loop: true });
         side.hero.setFlip(false);
@@ -88,8 +91,6 @@ window.ZD = window.ZD || {};
         world.classList.remove('alarm');
         await step(anime({ targets: horde.map((z) => z.el), opacity: 0, duration: D(400), easing: 'linear' }).finished);
         side.clearHorde();
-        side.wall.root.style.display = '';
-        side.wall.glass.restore();
         const demo = { type: 'sector', start: -50, sweep: 100 };
         side.setTarget(demo);
         side.zombie.show(true);
