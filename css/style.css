@@ -198,20 +198,6 @@ button { font-family: inherit; }
 .glass.cracked .glass-disc { filter: brightness(1.2); }
 .glass-lock { transform-origin: center; transform-box: fill-box; }
 
-.lamp {
-  position: absolute;
-  width: 26px;
-  height: 46px;
-  border-radius: 8px;
-  background: linear-gradient(#ffe08a, #c97a1a);
-  box-shadow: 0 0 10px rgba(255, 209, 102, 0.5);
-  border: 3px solid #3a1a5c;
-  pointer-events: none;
-  transition: background 0.3s, box-shadow 0.3s;
-}
-.lamp.side { width: 20px; height: 36px; }
-.lamp.alert { background: var(--red); box-shadow: 0 0 26px var(--red); animation: blink 0.4s infinite alternate; }
-.lamp.safe { background: var(--green); box-shadow: 0 0 26px var(--green); }
 @keyframes blink { from { opacity: 1; } to { opacity: 0.35; } }
 
 /* ---------------- projectile & fx ---------------- */
@@ -777,7 +763,6 @@ button { font-family: inherit; }
 
 /* reduced motion */
 body.reduced-motion .glass-outline,
-body.reduced-motion .lamp.alert,
 body.reduced-motion .gate-lamp.warn,
 body.reduced-motion .pip.active,
 body.reduced-motion .surv .arm { animation: none; }

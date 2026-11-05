@@ -466,12 +466,6 @@ window.ZD = window.ZD || {};
       this.el.appendChild(this.interior);
       this.wallEl = el('div', { class: 'wall-stage', style: { left: wx + 'px', top: wy + 'px', width: ww + 'px', height: wh + 'px', zIndex: 11, backgroundImage: `url("${A.wallUrl('stage')}")` } });
       this.el.appendChild(this.wallEl);
-      // security lamps on the wall
-      this.lamps = [el('div', { class: 'lamp', style: { left: wx + ww * 0.235 + 'px', top: wy + wh * 0.28 + 'px' } }), el('div', { class: 'lamp', style: { left: wx + ww * 0.76 + 'px', top: wy + wh * 0.28 + 'px' } })];
-      this.lamps.forEach((l) => {
-        l.style.zIndex = 12;
-        this.el.appendChild(l);
-      });
       this.glass = new GlassMech({ cx: this.hole.x, cy: this.hole.y, r: this.R });
       this.glass.el.style.zIndex = 12;
       this.el.appendChild(this.glass.el);
@@ -499,12 +493,6 @@ window.ZD = window.ZD || {};
       this.layers.forEach((l) => {
         if (l.tiled) scrollTiled(l, px);
         else if (l.factor) l.node.style.transform = `translateX(${-px * l.factor}px)`;
-      });
-    }
-
-    setLamps(state) {
-      this.lamps.forEach((l) => {
-        l.className = 'lamp ' + (state || '');
       });
     }
 
@@ -607,10 +595,9 @@ window.ZD = window.ZD || {};
       const root = el('div', { class: 'wall-slot', style: { zIndex: 12 } });
       const img = el('div', { class: 'wall-side', style: { left: this.wallHome + 'px', top: this.groundY - this.wallH + 'px', width: this.wallW + 'px', height: this.wallH + 'px', backgroundImage: `url("${A.wallUrl('angle1')}")` } });
       const glass = new GlassMech({ cx: this.wallHome + this.holeOffset.x, cy: this.groundY - this.wallH + this.holeOffset.y, r: this.holeRy, squash: this.holeRx / this.holeRy });
-      const lamp = el('div', { class: 'lamp side', style: { left: this.wallHome + this.wallW * 0.62 + 'px', top: this.groundY - this.wallH * 0.86 + 'px' } });
-      root.append(img, glass.el, lamp);
+      root.append(img, glass.el);
       this.el.appendChild(root);
-      return { root, img, glass, lamp, offset: 0 };
+      return { root, img, glass, offset: 0 };
     }
 
     get wall() {
@@ -619,10 +606,6 @@ window.ZD = window.ZD || {};
 
     get nextWall() {
       return this.walls[1 - this.cur];
-    }
-
-    setLamps(state) {
-      this.wall.lamp.className = 'lamp side ' + (state || '');
     }
 
     setTarget(spec) {
@@ -660,7 +643,6 @@ window.ZD = window.ZD || {};
       nw.offset = distance;
       nw.glass.restore();
       nw.glass.setTarget(null);
-      nw.lamp.className = 'lamp side';
       nw.root.style.display = gate ? 'none' : '';
       if (gate) this._buildGate(distance);
       this.zombieOffset = distance;
