@@ -91,6 +91,17 @@ tools/build-assets.py      raw art → assets/build (Pillow, numpy, scipy)
 Hero sheets are 4×3 grids (12 frames). Zombie side sheets are 4×N grids.
 Zombie front strips are extracted from the labelled reference cards.
 
+## Front view (road, fences, wall)
+
+The front view's ground and fences are pre-rendered by `build_front_road()` in
+`tools/build-assets.py`: the dirt land (`land/Open Dirt Terrain with Corner
+Rocks.png`, tiled via `build_dirt()`) is projected onto the ground plane and
+the front-view fence art onto two planes lining the road, all from one camera
+(`FRONT_CAM`: vanishing point 960,610 - camera height 470 - perspective 1000 -
+road half-width 742).  At the wall's depth the road is exactly as wide as the
+wall, so the wall stands across the road fence to fence.  Change `FRONT_CAM`
+there (not in `js/scene.js`) and re-run the pipeline.
+
 ## Adding questions / missions
 
 All learning content is data in `js/config/missions.js`:

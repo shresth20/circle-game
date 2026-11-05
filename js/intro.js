@@ -82,8 +82,8 @@ window.ZD = window.ZD || {};
         side.hero.play({ sheet: 'hero.sideFear', fps: 14 }).then(() => !skipped && side.hero.setFrame(11));
         await step(wait(D(1200)));
         if (skipped) throw 'skip';
-        ZD.ui.caption('intro1Vo');
-        await step(wait(D(2200)));
+        ZD.ui.caption('');
+        await step(wait(D(1600)));
         if (skipped) throw 'skip';
         hordeAnim.pause();
 
@@ -97,13 +97,11 @@ window.ZD = window.ZD || {};
         side.zombie.setPos(side.zombieHome.x, side.zombieHome.y);
         side.zombie.play({ sheet: 'zombie.side.idle', fps: 7, loop: true });
         side.hero.play({ sheet: 'hero.sideIdle', fps: 9, loop: true });
-        ZD.ui.caption('intro2Vo');
-        await step(wait(D(2600)));
+        await step(wait(D(1000)));
         if (skipped) throw 'skip';
 
         // wrong piece: the glass breaks and the zombie dives through the circle
-        ZD.ui.caption('intro2Wrong');
-        await step(wait(D(1200)));
+        await step(wait(D(300)));
         if (skipped) throw 'skip';
         await step(ZD.game.sideThrowDemo({ type: 'arc', start: -50, sweep: 100 }, false));
         if (skipped) throw 'skip';
@@ -119,8 +117,7 @@ window.ZD = window.ZD || {};
 
         // right piece: it passes the circle, knocks the zombie out, and the
         // hero jumps through to the next wall
-        ZD.ui.caption('intro2Right');
-        await step(wait(D(1200)));
+        await step(wait(D(400)));
         if (skipped) throw 'skip';
         await step(ZD.game.sideThrowDemo(demo, true));
         if (skipped) throw 'skip';

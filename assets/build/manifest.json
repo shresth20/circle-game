@@ -55,13 +55,6 @@
    "ox": 0,
    "oy": 505
   },
-  "fencePersp": {
-   "src": "bg/fence-persp.webp",
-   "w": 2500,
-   "h": 480,
-   "ox": 0,
-   "oy": 400
-  },
   "landRoad": {
    "src": "bg/land-road.webp",
    "w": 2500,
@@ -153,6 +146,23 @@
    "src": "bg/game-over.webp",
    "w": 1572,
    "h": 774
+  },
+  "dirt": {
+   "src": "bg/dirt.webp",
+   "w": 1854,
+   "h": 600
+  },
+  "frontGround": {
+   "src": "bg/front-ground.webp",
+   "w": 2560,
+   "h": 490,
+   "y": 590
+  },
+  "frontFences": {
+   "src": "bg/front-fences.webp",
+   "w": 2560,
+   "h": 660,
+   "y": 420
   }
  },
  "sprites": {
@@ -436,17 +446,6 @@
     "cy": 323.7,
     "rx": 15.0,
     "ry": 104.5
-   }
-  },
-  "stage": {
-   "src": "wall/stage.webp",
-   "w": 1424,
-   "h": 944,
-   "hole": {
-    "cx": 703.5,
-    "cy": 302.8,
-    "rx": 180.5,
-    "ry": 176.5
    }
   }
  }

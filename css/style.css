@@ -91,18 +91,6 @@ button { font-family: inherit; }
 .layer.tiled .tile { position: absolute; top: 0; background-repeat: no-repeat; background-position: 0 0; }
 .layer.far { filter: var(--f-far); }
 .layer.mid { filter: var(--f-mid); }
-.ground {
-  position: absolute;
-  background: linear-gradient(180deg, #6a3a93 0%, #4d2a70 35%, #3b1d5a 100%);
-}
-.ground::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background:
-    radial-gradient(ellipse 40% 30% at 50% 0%, rgba(255, 160, 90, 0.25), transparent 70%),
-    repeating-linear-gradient(170deg, rgba(0, 0, 0, 0.05) 0 3px, transparent 3px 46px);
-}
 .wall-stage, .wall-side {
   position: absolute;
   background-size: 100% 100%;
@@ -121,6 +109,7 @@ button { font-family: inherit; }
   background: radial-gradient(circle at 50% 35%, rgba(70, 40, 120, 0.25), rgba(10, 5, 25, 0.8) 85%);
 }
 .props { position: absolute; inset: 0; pointer-events: none; }
+.layer.baked { background-size: 100% 100%; background-repeat: no-repeat; }
 
 /* colour grade: one soft-light wash unifies every asset under the sunset */
 #grade {

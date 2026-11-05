@@ -430,31 +430,47 @@ window.ZD = window.ZD || {};
       L(tiledLayer('mountains', { y: 440, z: 5, factor: 0.08, cls: 'far', mirror: true }));
       L(propLayer('tower', { x: -40, y: 780, scale: 0.72, z: 6, factor: 0.12, cls: 'mid' }));
       L(propLayer('tree', { x: 1440, y: 760, scale: 0.8, z: 6, factor: 0.14, cls: 'mid' }));
-      L(tiledLayer('fencePersp', { y: 360, z: 7, factor: 0, cls: 'mid', mirror: true }));
-      // ground plane with scattered props
-      this.ground = el('div', { class: 'ground', style: { left: WORLD_X + 'px', top: '600px', width: WORLD_W + 'px', height: '560px', zIndex: 8 } });
-      this.el.appendChild(this.ground);
-      const propsEl = el('div', { class: 'props', style: { zIndex: 9 } });
+      /* Ground, road and fences are pre-rendered by tools/build-assets.py
+         (build_front_road) from ONE perspective camera, so the wall reads as
+         standing IN the road:  vanishing point (960, 610), camera height 470,
+         perspective 1000, road half-width 742 -> ~297px at the wall's depth,
+         i.e. the wall spans the road fence to fence.  Change FRONT_CAM there,
+         not here. */
+      const baked = (key, z) => {
+        const im = A.image(key);
+        return el('div', { class: 'layer baked', style: { left: WORLD_X + 'px', top: im.y + 'px', width: im.w + 'px', height: im.h + 'px', zIndex: z, backgroundImage: `url("${A.imageUrl(key)}")` } });
+      };
+      this.el.appendChild(baked('frontGround', 7));
+
+      // scenery outside the fences (seen through the chain-link)
+      const propsEl = el('div', { class: 'props', style: { zIndex: 8 } });
       this.el.appendChild(propsEl);
-      const spots = [
-        [-120, 700, 'grass2'], [60, 760, 'rock3'], [180, 700, 'grass5'], [-230, 900, 'rock1'], [120, 1000, 'grass1'], [1620, 690, 'grass4'], [1760, 740, 'rock4'], [1900, 820, 'grass2'], [2000, 980, 'rock2'], [1700, 1010, 'grass1'], [1300, 650, 'grass6'], [560, 650, 'grass7'], [2150, 700, 'grass3'], [-300, 1040, 'grass3'], [1500, 1055, 'rock6'], [330, 640, 'rock7'],
-      ];
-      spots.forEach(([x, y, k]) => {
-        const sc = 0.45 + ((y - 600) / 480) * 0.8;
-        const p = propLayer(k, { x, y, scale: sc, z: 9 });
-        propsEl.appendChild(p.node);
+      [[-260, 690, 'grass2'], [-60, 720, 'rock3'], [190, 660, 'grass5'], [420, 640, 'grass7'], [80, 800, 'grass1'], [1560, 650, 'grass6'], [1780, 700, 'grass4'], [1980, 760, 'rock4'], [2120, 690, 'grass3'], [1700, 820, 'grass2']].forEach(([x, y, k]) => {
+        const sc = 0.4 + ((y - 600) / 480) * 0.8;
+        propsEl.appendChild(propLayer(k, { x, y, scale: sc, z: 8 }).node);
       });
 
-      // wall + platform
-      const wall = A.wall('stage');
-      this.wallScale = 0.82;
+      // chain-link fences lining both sides of the road
+      this.el.appendChild(baked('frontFences', 9));
+
+      // the wall, standing across the road (fence to fence)
+      const wall = A.wall('front');
+      this.hole = { x: 960, y: 430 };
+      this.wallScale = 146 / ((wall.hole.rx + wall.hole.ry) / 2);
       const ww = Math.round(wall.w * this.wallScale);
       const wh = Math.round(wall.h * this.wallScale);
-      this.hole = { x: 960, y: 430 };
       this.R = Math.round(((wall.hole.rx + wall.hole.ry) / 2) * this.wallScale);
       const wx = this.hole.x - wall.hole.cx * this.wallScale;
       const wy = this.hole.y - wall.hole.cy * this.wallScale;
-      this.wallBox = { x: wx, y: wy, w: ww, h: wh };
+      // contact shadow on the road under the wall's base
+      this.el.appendChild(el('div', { class: 'wall-shadow', style: { left: wx - 30 + 'px', top: wy + wh - 18 + 'px', width: ww + 60 + 'px', height: '40px', zIndex: 10 } }));
+      // corner rocks + grass in the foreground (as in the land art)
+      const fore = el('div', { class: 'props', style: { zIndex: 13 } });
+      this.el.appendChild(fore);
+      [[-150, 1110, 'rock1', 1.0], [70, 1095, 'grass3', 0.9], [1720, 1105, 'rock2', 1.0], [1640, 1090, 'grass1', 0.85], [1930, 1100, 'grass4', 0.9]].forEach(([x, y, k, sc]) => {
+        fore.appendChild(propLayer(k, { x, y, scale: sc, z: 13 }).node);
+      });
+
       // zombie waits behind the wall, visible through the opening
       this.zombie = new ZD.Sprite({ className: 'char-zombie behind', zIndex: 10 });
       this.zombie.setSheet('zombie.front.idle');
@@ -462,9 +478,9 @@ window.ZD = window.ZD || {};
       this.zombie.setScale(1.0);
       this.el.appendChild(this.zombie.el);
       // soft dark interior behind the glass so the zombie reads as "beyond"
-      this.interior = el('div', { class: 'interior', style: { left: this.hole.x - this.R + 'px', top: this.hole.y - this.R + 'px', width: this.R * 2 + 'px', height: this.R * 2 + 'px', zIndex: 9 } });
+      this.interior = el('div', { class: 'interior', style: { left: this.hole.x - this.R + 'px', top: this.hole.y - this.R + 'px', width: this.R * 2 + 'px', height: this.R * 2 + 'px', zIndex: 10 } });
       this.el.appendChild(this.interior);
-      this.wallEl = el('div', { class: 'wall-stage', style: { left: wx + 'px', top: wy + 'px', width: ww + 'px', height: wh + 'px', zIndex: 11, backgroundImage: `url("${A.wallUrl('stage')}")` } });
+      this.wallEl = el('div', { class: 'wall-stage', style: { left: wx + 'px', top: wy + 'px', width: ww + 'px', height: wh + 'px', zIndex: 11, backgroundImage: `url("${A.wallUrl('front')}")` } });
       this.el.appendChild(this.wallEl);
       this.glass = new GlassMech({ cx: this.hole.x, cy: this.hole.y, r: this.R });
       this.glass.el.style.zIndex = 12;
@@ -473,11 +489,11 @@ window.ZD = window.ZD || {};
       // hero (back view) in the foreground
       this.hero = new ZD.Sprite({ className: 'char-hero', zIndex: 20 });
       this.hero.setSheet('hero.backIdle');
-      this.heroHome = { x: 330, y: 1062 };
+      this.heroHome = { x: 390, y: 1062 };
       this.hero.setScale(1.2);
       this.hero.setPos(this.heroHome.x, this.heroHome.y);
       this.el.appendChild(this.hero.el);
-      this.heroHand = { x: 470, y: 790 };
+      this.heroHand = { x: 530, y: 790 };
 
       this.projectile = new Projectile(this.R);
       this.projectile.el.style.zIndex = 15;

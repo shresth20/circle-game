@@ -193,7 +193,6 @@ def build_layers():
     alpha_layer("tower", "bg/Purple Watchtower with Golden Spotlight.png", "bg/tower.webp", crop="auto")
     alpha_layer("tree", "bg/Isolated Sunset Tree and Grass.png", "bg/tree.webp", crop="auto")
     alpha_layer("fenceFront", "bg/fence_front_view_25x9.png", "bg/fence-front.webp", crop=(0, 505, 2500, 880), tile=0)
-    alpha_layer("fencePersp", "bg/fence_perspective_25x9.png", "bg/fence-persp.webp", crop=(0, 400, 2500, 880), tile=0)
     alpha_layer("landRoad", "land/land_road_25x9.png", "bg/land-road.webp", crop=(0, 530, 2500, 900), tile=0)
 
     for i in range(1, 8):
@@ -203,11 +202,132 @@ def build_layers():
         arr = stretch_alpha(load(f"land/rock_0{i}.png"), lo=12)
         MANIFEST["images"][f"rock{i}"] = {"src": save(arr, f"props/rock-{i}.webp", 86), "w": arr.shape[1], "h": arr.shape[0]}
 
+    build_dirt()
+    build_front_road()
+
     # Perspective road (used by the mission-map intro scene) and the defeat illustration.
     road = load("full-picture/image copy 5.png")
     MANIFEST["images"]["roadPersp"] = {"src": save_opaque(road, "bg/road-persp.webp", 80), "w": road.shape[1], "h": road.shape[0]}
     go = load("full-picture/image copy.png")[108:882, 50:1622]
     MANIFEST["images"]["gameOver"] = {"src": save_opaque(go, "bg/game-over.webp", 82), "w": go.shape[1], "h": go.shape[0]}
+
+
+def build_dirt():
+    """Front-view ground: the dirt terrain without its corner-rock band, at half
+    size, mirrored 2x2 so the runtime can repeat it seamlessly across the 3D
+    ground plane (the corner rocks are placed as separate props)."""
+    dirt = load("land/Open Dirt Terrain with Corner Rocks.png")[60:660, 8:-8, :3].astype(np.float32)
+    # flatten the art's top vignette so repeated tiles don't band
+    rows = ndimage.uniform_filter1d(dirt.mean(axis=(1, 2)), 61, mode="nearest")
+    cols = ndimage.uniform_filter1d(dirt.mean(axis=(0, 2)), 61, mode="nearest")
+    m = dirt.mean()
+    dirt = np.clip(dirt * (m / rows)[:, None, None] * (m / cols)[None, :, None], 0, 255).astype(np.uint8)
+    dirt = np.dstack([dirt, np.full(dirt.shape[:2], 255, np.uint8)])
+    dirt = np.array(Image.fromarray(dirt).resize((dirt.shape[1] // 2, dirt.shape[0] // 2), Image.LANCZOS))
+    top = np.concatenate([dirt, dirt[:, ::-1]], axis=1)
+    tile = np.concatenate([top, top[::-1]], axis=0)
+    MANIFEST["images"]["dirt"] = {"src": save_opaque(tile, "bg/dirt.webp", 80), "w": tile.shape[1], "h": tile.shape[0]}
+
+
+# Front-view camera (stage px).  Must match FrontScene in js/scene.js.
+FRONT_CAM = {
+    "vp": (960.0, 610.0),   # vanishing point / horizon
+    "cam_h": 470.0,         # camera height: ground at depth 0 is the stage bottom (y 1080)
+    "persp": 1000.0,        # perspective distance (depth units = px at depth 0)
+    "road_hw": 742.0,       # half-width of the road between the fences
+    "fence_h": 560.0,       # fence height
+    "world_x": -320, "world_w": 2560,
+}
+
+
+def _mips(tex, levels=6):
+    """Box-filtered pyramid, each level resized back to full size so lookups
+    use the same coordinates (cheap stand-in for mipmapping)."""
+    out = [tex.astype(np.float32)]
+    im = Image.fromarray(tex)
+    for i in range(1, levels):
+        f = 2 ** i
+        small = im.resize((max(1, tex.shape[1] // f), max(1, tex.shape[0] // f)), Image.BOX)
+        out.append(np.array(small.resize((tex.shape[1], tex.shape[0]), Image.BILINEAR)).astype(np.float32))
+    return out
+
+
+def build_front_road():
+    """Pre-render the front view's ground (dirt land receding to the horizon,
+    a worn road track between the fences) and the two chain-link fences that
+    line the road, as seen by FRONT_CAM.  Two layers so props can sit between
+    them.  Rendered at 2x and downsampled for anti-aliasing."""
+    c = FRONT_CAM
+    vx, vy = c["vp"]
+    H0, P, RW, FH = c["cam_h"], c["persp"], c["road_hw"], c["fence_h"]
+    ss = 2
+    TEX_K = 2.0                                          # dirt texel = 2 px at depth 0
+    X0, W = c["world_x"], c["world_w"]
+
+    # ---- ground: rows y 590..1080 ------------------------------------------
+    gy0, gy1 = 590, 1080
+    dirt = np.array(Image.open(OUT / "bg" / "dirt.webp").convert("RGB"))
+    th, tw = dirt.shape[:2]
+    mips = _mips(dirt)
+    ys = gy0 + (np.arange((gy1 - gy0) * ss) + 0.5) / ss
+    xs = X0 + (np.arange(W * ss) + 0.5) / ss
+    k = np.clip((ys - vy) / H0, 1e-3, None)            # projection scale per row
+    depth = P * (1.0 / k - 1.0)                          # depth (px at depth 0)
+    out = np.zeros((len(ys), len(xs), 3), np.float32)
+    for r, (kr, dr) in enumerate(zip(k, depth)):
+        foot = P / (H0 * kr * kr) / ss / TEX_K           # texture px per output px (vertical)
+        lvl = int(np.clip(np.log2(max(foot, 1.0)) + 0.5, 0, len(mips) - 1))
+        xw = (xs - vx) / kr                              # lateral position on the ground
+        u = np.mod(xw / TEX_K + tw / 2, tw).astype(np.int32)
+        v = int(np.mod(dr / TEX_K, th))
+        out[r] = mips[lvl][v, u]
+    # road track: lighter between the fences, darker outside, two wheel ruts
+    XW = (xs[None, :] - vx) / k[:, None]
+    a = np.abs(XW)
+    shade = np.interp(a, [0, 120, 230, 300, 380, RW - 80, RW, RW + 40, RW + 220], [1.12, 1.10, 1.02, 0.88, 1.03, 1.04, 0.86, 0.80, 0.74])
+    out *= shade[:, :, None]
+    # horizon haze
+    haze = np.array([120, 70, 165], np.float32)
+    hz = np.clip(1.0 - (ys - vy) / 95.0, 0, 1) ** 1.6
+    out = out * (1 - hz[:, None, None]) + haze * hz[:, None, None]
+    alpha = np.clip((ys - gy0) / 22.0, 0, 1)[:, None] * np.ones((1, len(xs)))
+    rgba = np.dstack([np.clip(out, 0, 255), alpha * 255]).astype(np.uint8)
+    rgba = np.array(Image.fromarray(rgba).resize((W, gy1 - gy0), Image.LANCZOS))
+    MANIFEST["images"]["frontGround"] = {"src": save(rgba, "bg/front-ground.webp", 82), "w": W, "h": gy1 - gy0, "y": gy0}
+
+    # ---- fences: rows y 420..1080 ------------------------------------------
+    fy0, fy1 = 420, 1080
+    # post centre to post centre (5 bays) = one seamless period
+    fence = stretch_alpha(load("bg/fence_front_view_25x9.png"), lo=20)[505:880, 75:2027]
+    fth, ftw = fence.shape[:2]
+    fs = fth / FH                                                  # texture px per fence px
+    fm = _mips(fence, levels=7)
+    ys = fy0 + (np.arange((fy1 - fy0) * ss) + 0.5) / ss
+    xs = X0 + (np.arange(W * ss) + 0.5) / ss
+    acc = np.zeros((len(ys), len(xs), 4), np.float32)
+    for side in (-1, 1):
+        kc = side * (xs - vx) / RW                                 # projection scale per column
+        ok = kc > 0.02
+        kcs = np.where(ok, kc, 1.0)
+        y_base = vy + H0 * kcs
+        y_top = vy + (H0 - FH) * kcs
+        dcol = P * (1.0 / kcs - 1.0)
+        for ci in np.nonzero(ok)[0]:
+            kk = kcs[ci]
+            rows = np.nonzero((ys >= y_top[ci]) & (ys < y_base[ci]))[0]
+            if not len(rows):
+                continue
+            foot = max(fs / (kk * ss), fs * P / (RW * kk * kk * ss))
+            lvl = int(np.clip(np.log2(max(foot, 1.0)), 0, len(fm) - 1))
+            h = (y_base[ci] - ys[rows]) / kk                       # height above ground
+            tv = np.clip(((FH - h) * fs).astype(np.int32), 0, fth - 1)
+            tu = int(np.mod(dcol[ci] * fs, ftw))
+            px = fm[lvl][tv, tu]
+            hz = np.clip(1.0 - (y_base[ci] - vy) / 95.0, 0, 1) ** 1.6
+            px[:, :3] = px[:, :3] * (1 - hz) + haze * hz
+            acc[rows, ci] = px
+    rgba = np.array(Image.fromarray(np.clip(acc, 0, 255).astype(np.uint8)).resize((W, fy1 - fy0), Image.LANCZOS))
+    MANIFEST["images"]["frontFences"] = {"src": save(rgba, "bg/front-fences.webp", 84), "w": W, "h": fy1 - fy0, "y": fy0}
 
 
 # --------------------------------------------------------------------------- #
@@ -225,14 +345,6 @@ def build_walls():
         part = stretch_alpha(part[by0:by1, bx0:bx1].copy(), lo=24)
         hole = interior_hole(part)
         MANIFEST["walls"][name] = {"src": save(part, f"wall/{name}.webp", 88), "w": part.shape[1], "h": part.shape[0], "hole": hole}
-
-    stage = load("wall/Transparent Stone Ring in Brick Wall.png")
-    stage = keep_big_components(stage, thresh=150, min_area=400000, grow=2)  # only the wall+platform
-    stage = stretch_alpha(stage, lo=60)
-    x0, y0, x1, y1 = bbox(stage, thresh=40)
-    stage = stage[y0:y1, x0:x1]
-    hole = interior_hole(stage)
-    MANIFEST["walls"]["stage"] = {"src": save(stage, "wall/stage.webp", 88), "w": stage.shape[1], "h": stage.shape[0], "hole": hole}
 
 
 # --------------------------------------------------------------------------- #
