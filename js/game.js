@@ -145,12 +145,10 @@ window.ZD = window.ZD || {};
       this.correct = 0;
       this.concepts = new Set();
       ZD.ui.setHearts(this.hearts, mission.hearts);
-      ZD.ui.setScore(0, false);
       ZD.ui.showHud(true);
       let wi = 0;
       while (wi < mission.walls.length) {
         const wall = mission.walls[wi];
-        ZD.ui.setProgress(wi, mission.walls.length, wi);
         this.guard(E);
         await this.wallTitle(wall, wi);
         const result = await this.playWall(wall, wi, E);
@@ -168,7 +166,6 @@ window.ZD = window.ZD || {};
           this.resetAfterGameOver();
           continue;
         }
-        ZD.ui.setProgress(wi, mission.walls.length, wi + 1);
         if (wi < mission.walls.length - 1) {
           await this.transition(E);
         }
@@ -238,7 +235,6 @@ window.ZD = window.ZD || {};
           this.score += gained;
           this.concepts.add(targetLabel);
           await this.correctSide(target, targetLabel, wall.level, E);
-          ZD.ui.setScore(this.score);
           return 'cleared';
         }
         misses++;

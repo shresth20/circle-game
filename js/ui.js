@@ -45,10 +45,6 @@ window.ZD = window.ZD || {};
       this.heartsEl = el('div', { class: 'hearts' });
       const left = el('div', { class: 'hud-left' }, [portrait, this.heartsEl]);
 
-      this.progressEl = el('div', { class: 'progress' });
-      this.scoreEl = el('div', { class: 'score' }, [el('span', { class: 'score-label', text: T('hudScore') }), el('span', { class: 'score-val', text: '0' })]);
-      const center = el('div', { class: 'hud-center' }, [this.progressEl, this.scoreEl]);
-
       this.muteBtn = el('button', { class: 'icon-btn', 'aria-label': T('hudMute'), onClick: () => {
         ZD.audio.setMuted(!ZD.audio.muted);
         this._syncMute();
@@ -56,7 +52,7 @@ window.ZD = window.ZD || {};
       } });
       this.pauseBtn = el('button', { class: 'icon-btn pause', 'aria-label': T('hudPause'), html: '<span></span><span></span>', onClick: () => ZD.game && ZD.game.togglePause() });
       const right = el('div', { class: 'hud-right' }, [this.muteBtn, this.pauseBtn]);
-      h.append(left, center, right);
+      h.append(left, right);
       this._syncMute();
     },
     _syncMute() {
@@ -78,23 +74,6 @@ window.ZD = window.ZD || {};
       ZD.audio.play('heart');
       anime({ targets: h, scale: [1, 1.6, 0.9, 1], rotate: [0, -15, 10, 0], duration: 600, easing: 'easeOutQuad' });
       setTimeout(() => h.classList.add('lost'), 300);
-    },
-    setProgress(current, total, done) {
-      this.progressEl.innerHTML = '';
-      const label = el('div', { class: 'progress-label', text: T('hudWall', { n: Math.min(current + 1, total), total }) });
-      const pips = el('div', { class: 'pips' });
-      for (let i = 0; i < total; i++) pips.appendChild(el('div', { class: 'pip' + (i < done ? ' done' : i === current ? ' active' : '') }));
-      this.progressEl.append(label, pips);
-    },
-    setScore(n, animate = true) {
-      const v = this.scoreEl.querySelector('.score-val');
-      if (!animate) {
-        v.textContent = n;
-        return;
-      }
-      const o = { s: parseInt(v.textContent, 10) || 0 };
-      anime({ targets: o, s: n, round: 1, duration: 600, easing: 'easeOutQuad', update: () => (v.textContent = o.s) });
-      anime({ targets: v, scale: [1.4, 1], duration: 500, easing: 'easeOutBack' });
     },
 
     /* ---------------- prompt + options ---------------- */

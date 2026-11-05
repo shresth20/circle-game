@@ -341,15 +341,6 @@ button { font-family: inherit; }
   transition: filter 0.3s, transform 0.3s;
 }
 .heart.lost { filter: grayscale(1) brightness(0.45); transform: scale(0.8); }
-.hud-center { position: absolute; left: 50%; top: 18px; transform: translateX(-50%); text-align: center; }
-.progress-label {
-  font-family: var(--display);
-  font-size: 34px;
-  color: var(--yellow);
-  letter-spacing: 1px;
-  text-shadow: 0 3px 0 var(--purple), 0 6px 14px rgba(0, 0, 0, 0.5);
-}
-.pips { display: flex; gap: 10px; justify-content: center; margin-top: 6px; }
 .pip {
   width: 56px;
   height: 16px;
@@ -358,10 +349,6 @@ button { font-family: inherit; }
   border: 2px solid rgba(255, 255, 255, 0.45);
 }
 .pip.done { background: var(--green); border-color: #2f9c45; box-shadow: 0 0 10px rgba(124, 255, 138, 0.6); }
-.pip.active { background: var(--yellow); border-color: #c97a1a; animation: pipPulse 0.9s infinite alternate; }
-@keyframes pipPulse { from { box-shadow: 0 0 0 rgba(255, 209, 102, 0); } to { box-shadow: 0 0 16px rgba(255, 209, 102, 0.9); } }
-.score { margin-top: 8px; font-family: var(--display); font-size: 24px; color: #fff; text-shadow: 0 2px 0 rgba(0, 0, 0, 0.5); }
-.score-val { margin-left: 10px; color: var(--yellow); display: inline-block; font-size: 30px; }
 .hud-right { position: absolute; right: 30px; top: 22px; display: flex; gap: 14px; pointer-events: auto; }
 .icon-btn {
   width: 76px;
@@ -764,6 +751,5 @@ button { font-family: inherit; }
 /* reduced motion */
 body.reduced-motion .glass-outline,
 body.reduced-motion .gate-lamp.warn,
-body.reduced-motion .pip.active,
 body.reduced-motion .surv .arm { animation: none; }
 body.reduced-motion #world.alarm #alarm-light { animation: none; opacity: 0.4; }

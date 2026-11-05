@@ -22,8 +22,6 @@
     "intro3Vo": "Match the correct circle parts, stop the zombies, and protect the safe zone!",
     "intro3Wall": "WALL {n}",
     "intro3Safe": "SAFE ZONE",
-    "hudWall": "WALL {n}/{total}",
-    "hudScore": "SCORE",
     "hudPause": "Pause",
     "hudMute": "Sound",
     "pieceArc": "ARC",
