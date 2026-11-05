@@ -1,18 +1,60 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
-  <title>Hole in the Wall – Parts of a Circle</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800;900&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet" />
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="theme-color" content="#1a0f33" />
+  <title>Zombie Defense — Parts of a Circle</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='28' fill='%235b2a86' stroke='%23ffd166' stroke-width='4'/%3E%3Cpath d='M32 32 L32 6 A26 26 0 0 1 56 40 Z' fill='%23ffb347'/%3E%3C/svg%3E" />
   <link rel="stylesheet" href="css/style.css" />
 </head>
 <body>
-  <div id="stage">
-    <canvas id="game" width="1672" height="941"></canvas>
+  <div id="app">
+    <div id="stage">
+      <div id="world">
+        <!-- scenes are injected here by js/scene.js -->
+        <div id="grade"></div>
+        <div id="alarm-light"></div>
+        <div id="vignette"></div>
+      </div>
+      <div id="flash"></div>
+      <div id="hud"></div>
+      <div id="prompt"></div>
+      <div id="banner" class="banner"></div>
+      <div id="stamp" class="stamp"></div>
+      <div id="options"></div>
+      <div id="caption" class="caption"></div>
+      <div id="learn" class="overlay"></div>
+      <div id="intro" class="overlay"></div>
+      <div id="title" class="overlay"></div>
+      <div id="pause" class="overlay"></div>
+      <div id="complete" class="overlay"></div>
+      <div id="gameover" class="overlay"></div>
+    </div>
+    <div id="loader">
+      <div class="loader-title" data-i18n="appTitle">ZOMBIE DEFENSE</div>
+      <div class="bar"><div></div></div>
+      <div class="loader-text" data-i18n="appLoading">Loading the safe zone…</div>
+    </div>
+    <div id="rotate" data-i18n="rotateDevice">Please rotate your device to landscape ↻</div>
   </div>
-  <script src="js/audio.js"></script>
+
+  <script src="js/i18n.js"></script>
+  <script src="js/vendor/anime.min.js"></script>
+  <script src="assets/build/manifest.js"></script>
+  <script src="js/core/util.js"></script>
+  <script src="js/config/missions.js"></script>
+  <script src="js/core/audio.js"></script>
+  <script src="js/core/assets.js"></script>
+  <script src="js/core/sprites.js"></script>
+  <script src="js/geometry.js"></script>
+  <script src="js/scene.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/learn.js"></script>
+  <script src="js/intro.js"></script>
   <script src="js/game.js"></script>
+  <script src="js/main.js"></script>
 </body>
 </html>

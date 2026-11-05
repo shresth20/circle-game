@@ -1,0 +1,49 @@
+/* Boot: load locales, fit the 1920x1080 stage to the viewport, preload, start. */
+async function boot() {
+  const stage = document.getElementById('stage');
+
+  function fit() {
+    const s = Math.min(window.innerWidth / 1920, window.innerHeight / 1080);
+    stage.style.transform = `translate(-50%, -50%) scale(${s})`;
+    document.documentElement.style.setProperty('--s', s);
+  }
+  window.addEventListener('resize', fit);
+  window.addEventListener('orientationchange', () => setTimeout(fit, 200));
+  fit();
+
+  const bar = document.querySelector('#loader .bar > div');
+  try {
+    await ZD.assets.preload((p) => {
+      bar.style.transform = `scaleX(${p})`;
+    });
+  } catch (e) {
+    console.error('preload failed', e);
+  }
+
+  ZD.scene.init(document.getElementById('world'));
+  ZD.ui.init(stage);
+  document.body.classList.toggle('reduced-motion', ZD.scene.settings.reducedMotion);
+
+  const loader = document.getElementById('loader');
+  anime({ targets: loader, opacity: 0, duration: 400, easing: 'linear', complete: () => loader.remove() });
+
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' || e.key === 'p') ZD.game.togglePause();
+    if (e.key === 'm') {
+      ZD.audio.setMuted(!ZD.audio.muted);
+      ZD.ui._syncMute();
+    }
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden && !ZD.game.paused) ZD.game.togglePause();
+  });
+  // keep the audio context alive after the first gesture on iOS
+  window.addEventListener('pointerdown', () => ZD.audio.unlock(), { once: true });
+
+  ZD.game.run();
+}
+
+I18n.load(() => {
+  I18n.applyStatic();
+  boot();
+});

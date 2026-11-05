@@ -1,0 +1,4 @@
+{
+  "_comment": "List the keys that have a recorded clip at assets/VO/en/<key>.webm. Unlisted keys fall back to browser speech of the text in locales/locales.json.",
+  "clips": []
+}

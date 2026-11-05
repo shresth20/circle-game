@@ -1,0 +1,9 @@
+# browser-test output (Playwright MCP)
+.playwright-mcp/
+
+# python
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
