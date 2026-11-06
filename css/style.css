@@ -115,6 +115,14 @@ button { font-family: inherit; }
   background: radial-gradient(circle at 50% 35%, rgba(70, 40, 120, 0.25), rgba(10, 5, 25, 0.8) 85%);
 }
 .props { position: absolute; inset: 0; pointer-events: none; }
+/* generated scenery band (Scatter in js/scene.js): moved as one by transform */
+.scatter { position: absolute; left: 0; top: 0; width: 0; height: 0; pointer-events: none; will-change: transform; }
+/* dry trees and towers are faded a little into the evening haze so they
+   stay scenery and never compete with the wall, hero or zombie */
+.scatter.mid { filter: var(--f-mid) brightness(0.94) saturate(0.86); opacity: 0.82; }
+.layer.prop.faded { filter: var(--f-mid) brightness(0.94) saturate(0.86); opacity: 0.82; }
+/* farthest trees/towers sink into the evening haze */
+.scatter.far.distant { filter: var(--f-far) brightness(0.86) saturate(0.74); opacity: 0.72; }
 .layer.baked { background-size: 100% 100%; background-repeat: no-repeat; }
 
 /* colour grade: one soft-light wash unifies every asset under the sunset */
@@ -262,6 +270,13 @@ button { font-family: inherit; }
   margin: -32px 0 0 -32px;
   border-radius: 50%;
   background: radial-gradient(circle, #fff 0%, #ead9ff 45%, rgba(234, 217, 255, 0) 72%);
+}
+/* road dust kicked up by running feet */
+.puff.dust {
+  width: 44px;
+  height: 44px;
+  margin: -22px 0 0 -22px;
+  background: radial-gradient(circle, rgba(196, 128, 92, 0.9) 0%, rgba(168, 104, 84, 0.6) 45%, rgba(168, 104, 84, 0) 72%);
 }
 .dizzy { position: absolute; width: 0; height: 0; }
 .dizzy span { position: absolute; left: -16px; top: -16px; font-size: 30px; color: var(--yellow); text-shadow: 0 0 10px #fff; }
@@ -521,7 +536,6 @@ button { font-family: inherit; }
 .msgbar.good .banner-title { color: var(--green); }
 .msgbar.alert .banner-title { color: var(--yellow); font-size: 46px; animation: bar-alert 0.6s ease-in-out infinite alternate; }
 @keyframes bar-alert { from { opacity: 1; } to { opacity: 0.55; } }
-body.reduced-motion .msgbar.alert .banner-title { animation: none; }
 
 /* ---------------- overlays / panels / buttons ---------------- */
 .overlay {
@@ -631,10 +645,9 @@ body.reduced-motion .msgbar.alert .banner-title { animation: none; }
 .welcome-slot .bar > div { background: linear-gradient(90deg, #7cff8a, #2fbf4e); }
 .welcome-slot .loader-text { font-size: 28px; font-weight: 800; opacity: 1; text-shadow: 0 2px 6px rgba(0, 0, 0, 0.7); }
 
-/* play button: the art (assets/images/image copy.png) with a pulse - two
-   golden rings radiating from its disc, staggered, over a soft glow; it
-   lifts on hover and sinks on press.  The disc box (left/top/width/height)
-   is measured in build_start_button. */
+/* play button: the art (assets/images/image copy.png) over a soft glow,
+   with a gentle "tap me" heartbeat; it lifts on hover and sinks on press.
+   The disc box (left/top/width/height) is measured in build_start_button. */
 .play-btn {
   position: relative;
   width: 230px;
@@ -653,33 +666,26 @@ body.reduced-motion .msgbar.alert .banner-title { animation: none; }
   inset: 0;
   transition: transform 0.12s ease-out;
 }
-/* "tap me" heartbeat: grow, dip, small bounce, then rest (transform only) */
+/* gentle "tap me" heartbeat: a small grow, a soft settle, then rest
+   (transform only) */
 .play-img {
   position: absolute;
   inset: 0;
   background: url('../assets/build/ui/start-button.webp') center / contain no-repeat;
-  animation: play-beat 1.3s ease-in-out infinite;
+  animation: play-beat 1.6s ease-in-out infinite;
 }
 @keyframes play-beat {
   0% { transform: scale(1); }
-  16% { transform: scale(1.14); }
-  32% { transform: scale(0.94); }
-  46% { transform: scale(1.07); }
-  60% { transform: scale(1); }
+  20% { transform: scale(1.06); }
+  40% { transform: scale(0.985); }
+  55% { transform: scale(1.02); }
+  70% { transform: scale(1); }
   100% { transform: scale(1); }
-}
-/* reduced motion: still a clear "tap me" cue (the screen's call to action),
-   but a slow, small in-place grow and shrink - no bounce, no rings */
-body.reduced-motion .play-img { animation: play-beat-soft 1.8s ease-in-out infinite; }
-@keyframes play-beat-soft {
-  0%, 100% { transform: scale(1); }
-  50% { transform: scale(1.07); }
 }
 .play-btn:hover .play-art { transform: translateY(-4px); }
 .play-btn:active .play-art { transform: translateY(5px) scale(0.96); }
 .play-btn:focus-visible { outline: 6px solid #fff; outline-offset: 6px; }
-.play-glow,
-.play-pulse {
+.play-glow {
   position: absolute;
   left: 0.3%;
   top: 3.75%;
@@ -687,29 +693,14 @@ body.reduced-motion .play-img { animation: play-beat-soft 1.8s ease-in-out infin
   height: 93.5%;
   border-radius: 50%;
   pointer-events: none;
-}
-.play-glow {
-  background: radial-gradient(circle, rgba(255, 214, 80, 0.8), rgba(255, 214, 80, 0) 70%);
+  background: radial-gradient(circle, rgba(255, 214, 80, 0.7), rgba(255, 214, 80, 0) 68%);
   animation: play-glow 1.6s ease-in-out infinite alternate;
 }
 @keyframes play-glow {
-  from { transform: scale(1); opacity: 0.35; }
-  to { transform: scale(1.35); opacity: 0.8; }
+  from { transform: scale(1); opacity: 0.25; }
+  to { transform: scale(1.15); opacity: 0.5; }
 }
-.play-pulse {
-  border: 10px solid #ffe56b;
-  box-shadow: 0 0 22px 4px rgba(255, 200, 40, 0.9), inset 0 0 14px rgba(255, 200, 40, 0.7);
-  animation: play-pulse 1.3s ease-out infinite;
-  animation-delay: 0.2s; /* leaves the button at the beat's peak */
-}
-.play-pulse.late { animation-delay: 0.85s; }
-@keyframes play-pulse {
-  0% { transform: scale(0.98); opacity: 1; }
-  60% { opacity: 0.7; }
-  100% { transform: scale(1.55); opacity: 0; }
-}
-body.reduced-motion .play-glow { animation: none; opacity: 0.4; }
-body.reduced-motion .play-pulse { animation: none; opacity: 0; }
+
 
 /* lesson card (after a mistake) + game-over lesson */
 .overlay.lesson {
@@ -845,8 +836,3 @@ body.reduced-motion .play-pulse { animation: none; opacity: 0; }
 }
 @media (orientation: portrait) and (max-width: 820px) { #rotate { display: flex; } }
 
-/* reduced motion */
-body.reduced-motion .glass-outline,
-body.reduced-motion .glass.danger .glass-danger { animation: none; }
-body.reduced-motion .glass.danger .glass-danger { opacity: 0.7; }
-body.reduced-motion #world.alarm #alarm-light { animation: none; opacity: 0.4; }

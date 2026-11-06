@@ -76,7 +76,10 @@ js/
   config/missions.js       missions → walls → openings (data only)
   geometry.js              arc/sector/segment paths, piece ids + correctness
   scene.js                 front & side parallax scenes, glass mechanism,
-                           projectile, effects, camera transitions
+                           projectile, effects, camera transitions; endless
+                           seeded scenery (Scatter bands + biomes per wall:
+                           grove / outpost / rocky / wild) so the land keeps
+                           changing between walls instead of resetting
   ui.js                    HUD, six-button answer panel, stamps, panels, bottom message bar
   learn.js                 lesson card: correct piece fills the gap + reason
   intro.js                 title + 3-scene cinematic
@@ -91,6 +94,8 @@ assets/
   build/                   GENERATED game-ready WebP + manifest (do not edit)
   fonts/                   Lilita One, Nunito (OFL)
 tools/build-assets.py      raw art → assets/build (Pillow, numpy, scipy)
+tools/sprite_stabilizer.py frame-by-frame registration of AI-drawn sprite sheets
+tools/sprite-qa.py         smoothness check of the built sheets (jitter, slide, seams)
 ```
 
 ## Asset pipeline
@@ -111,6 +116,52 @@ tools/build-assets.py      raw art → assets/build (Pillow, numpy, scipy)
   (`WALL_RIMS`, an ellipse fitted to the rim - re-fit if the art changes),
 * writes `manifest.json` and `manifest.js` (loaded as a classic script so the
   game works from `file://`).
+
+`--only hero` / `--only zombie` rebuild just those sheets into the existing
+manifest.
+
+### Smooth sprite animation
+
+The character sheets are AI-drawn grids: every cell is a separate drawing,
+so the figure sits at a slightly different place, size and lean in each one
+and plays back as jiggle. (Video-driven sprite generators avoid this because
+their frames come from one continuous clip with a locked camera.)
+`tools/sprite_stabilizer.py` gives the drawn grids the same consistency,
+the way video stabilisation does:
+
+1. **Track**: the head (with size and tilt) and the boots are template-matched
+   against a reference frame. The ground line is the lowest solid row.
+2. **Place**: one anchor per frame. Idle, throw, fear and attack use the
+   planted boots. In-place runs use the head (offset to the vest for
+   zombies). Airborne cheer/jump frames keep their height above the ground
+   line of their grid row.
+3. **Smooth**: the head path is low-passed over time. Loops get a periodic fit
+   (idle: one sway per loop, run: two steps per loop), one-shots get a light
+   gaussian. The intended motion stays and the frame-to-frame zig-zag goes.
+4. **Correct**: each frame gets a small affine warp anchored at the feet: uniform
+   scale for size pops, shear for lean jitter, and a stretch of the body
+   below the neck for bob jitter (the head is never squashed). The head
+   lands on the smoothed path while the feet stay where they are. The warp
+   is rendered from the full-resolution drawing, so each frame is resampled
+   once.
+5. **Clean**: `defringe()` gives white- or grey-tinted anti-aliased edges the
+   ink colour and peels white matting specks (and, for the back-cheer sheet,
+   background haze) that differ per frame and would sparkle.
+
+The hero keeps the anchor where the old build had it (measured on the idle
+sheets: about 1 px from the boots, feet 8–11 px below the line), so the
+game's hand/core offsets still hold. Every hero and zombie sheet carries a
+fixed `shadowW`, so the shadow doesn't change size when the animation does.
+
+At runtime (`js/core/sprites.js`) each frame is held for a whole number of
+display refreshes (measured from rAF). On a 60 Hz screen, 16 fps used to
+alternate 4,4,4,3 refreshes (67/67/67/50 ms); now every frame lasts 4.
+
+Check a build with `python3 tools/sprite-qa.py` (`--strict` exits 1 on a
+failure). Per sheet it reports head noise (zig-zag left after removing the
+smooth motion), feet slide, ground-line spread, size pops and the loop
+seam. Values are in on-screen px at scale 1. Run it after replacing any
+character art.
 
 ### Replacing an asset
 

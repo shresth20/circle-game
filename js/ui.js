@@ -118,17 +118,12 @@ window.ZD = window.ZD || {};
       this._fillOptions(targetId);
       box.classList.remove('locked');
       const pills = Object.values(this.answerBtns);
-      if (!wasVisible) box.classList.add('visible');
-      if (ZD.scene.settings.reducedMotion) {
-        box.style.transform = '';
-        box.style.opacity = '';
-      } else {
-        if (!wasVisible) {
-          anime.remove(box);
-          anime({ targets: box, translateX: [80, 0], opacity: [0, 1], duration: 300, easing: 'easeOutCubic' });
-        }
-        anime({ targets: pills, translateX: [40, 0], opacity: [0, 1], duration: 260, delay: anime.stagger(60, { start: wasVisible ? 0 : 80 }), easing: 'easeOutCubic' });
+      if (!wasVisible) {
+        box.classList.add('visible');
+        anime.remove(box);
+        anime({ targets: box, translateX: [80, 0], opacity: [0, 1], duration: 300, easing: 'easeOutCubic' });
       }
+      anime({ targets: pills, translateX: [40, 0], opacity: [0, 1], duration: 260, delay: anime.stagger(60, { start: wasVisible ? 0 : 80 }), easing: 'easeOutCubic' });
       return new Promise((res) => (this._asking = res));
     },
     /* Stop accepting taps (time out / abort). */
@@ -148,7 +143,7 @@ window.ZD = window.ZD || {};
       if (!box.classList.contains('visible')) return Promise.resolve();
       const pills = Object.values(this.answerBtns || {});
       anime.remove([box, ...pills]);
-      if (instant || !this._panelBuilt || ZD.scene.settings.reducedMotion) {
+      if (instant || !this._panelBuilt) {
         box.classList.remove('visible');
         return Promise.resolve();
       }
@@ -204,15 +199,11 @@ window.ZD = window.ZD || {};
       if (title) t.append(el('div', { class: 'banner-title', text: title }));
       if (text) t.append(el('div', { class: 'banner-text', text }));
       anime.remove([b, t]);
-      const still = ZD.scene.settings.reducedMotion;
       if (wasVisible) {
         // already up: just swap the words
         b.style.opacity = 1;
         b.style.transform = '';
-        if (!still) anime({ targets: t, opacity: [0, 1], translateX: [16, 0], duration: 220, easing: 'easeOutCubic' });
-      } else if (still) {
-        b.style.opacity = 1;
-        b.style.transform = '';
+        anime({ targets: t, opacity: [0, 1], translateX: [16, 0], duration: 220, easing: 'easeOutCubic' });
       } else {
         anime({ targets: b, translateY: [60, 0], opacity: [0, 1], duration: 320, easing: 'easeOutCubic' });
         anime({ targets: t, opacity: [0, 1], duration: 260, delay: 90, easing: 'easeOutCubic' });
@@ -228,7 +219,6 @@ window.ZD = window.ZD || {};
         this._barHiding = false;
         b.classList.remove('visible');
       };
-      if (ZD.scene.settings.reducedMotion) return Promise.resolve(done());
       return anime({ targets: b, opacity: 0, translateY: 40, duration: 200, easing: 'easeInQuad' }).finished.then(done);
     },
     /* Caption by i18n key -> the message bar ('' hides it). */
@@ -304,7 +294,6 @@ window.ZD = window.ZD || {};
         }),
         toggle(T('pauseVoice'), () => ZD.audio.voiceEnabled, (v) => ZD.audio.setVoice(v)),
         toggle(T('pauseTimer'), () => ZD.game.timerOn, (v) => ZD.game.setTimerOn(v)),
-        toggle(T('pauseMotion'), () => ZD.scene.settings.reducedMotion, (v) => ZD.scene.setReducedMotion(v)),
       ]);
       return this.panel({
         id: 'pause',

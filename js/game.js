@@ -1,4 +1,4 @@
-/* Game state machine: title -> intro -> 6 walls -> finale.
+/* Game state machine: title -> 6 walls (intro cinematic disabled) -> finale.
    The six pieces are shuffled and dealt one per wall, so every piece is
    asked exactly once per play.  Each wall = one question:
    present (front) -> three answer buttons (+ zombie timer) -> throw ->
@@ -80,8 +80,7 @@ window.ZD = window.ZD || {};
         if (start === 'home') {
           await ZD.intro.title();
           this.guard(E);
-          await ZD.intro.play();
-          this.guard(E);
+          // intro cinematic (ZD.intro.play) disabled for now - to be recreated
           this.missionIndex = 0;
         }
         let action = 'play';
@@ -201,6 +200,8 @@ window.ZD = window.ZD || {};
       while (wi < this.walls.length) {
         const wall = this.walls[wi];
         this.guard(E);
+        // the two zombie variants take turns, one per wall
+        ZD.scene.setZombieSkin(wi);
         await this.wallTitle(wall);
         const result = await this.playWall(wall, E);
         this.guard(E);
@@ -218,6 +219,8 @@ window.ZD = window.ZD || {};
           continue;
         }
         if (wi < this.walls.length - 1) {
+          // the next wall's zombie shows up during the run there
+          ZD.scene.setZombieSkin(wi + 1);
           await this.transition(E);
         }
         wi++;
@@ -425,7 +428,6 @@ window.ZD = window.ZD || {};
           P.el.style.opacity = '';
           P.show(false);
         } });
-        ZD.ui.stamp(T('fbWrong'), 'wrong', 600);
         ZD.audio.play('fail');
         await wait(D(800));
         this.guard(E);
@@ -534,7 +536,6 @@ window.ZD = window.ZD || {};
       this.guard(E);
       await this.zombieHit();
       this.guard(E);
-      ZD.ui.stamp(T('fbCorrect'), 'correct', 900);
       ZD.audio.play('success');
       side.hero.play({ sheet: 'hero.sideCheer', fps: 12 }).then(() => side.hero.play({ sheet: 'hero.sideIdle', fps: 9, loop: true }));
       ZD.audio.play('yay');
@@ -645,7 +646,6 @@ window.ZD = window.ZD || {};
         fx().shards(side.fxLayer, side.hole.x, side.hole.y, 18, ['#bfe9ff', '#ffffff', '#ff8aa0', '#e0a070']);
         fx().shake(14, 500);
         fx().flash('#ff3b5c', 300, 0.35);
-        ZD.ui.stamp(T('fbBreached'), 'breach', 900);
         ZD.audio.play('scream');
         // startled: the hero flinches back as the zombie bursts through
         const back = { x: hero.x };

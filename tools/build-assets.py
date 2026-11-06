@@ -16,6 +16,7 @@ What it does
     sprites) and writes assets/build/manifest.json
 
 Run:   python3 tools/build-assets.py        (needs Pillow, numpy, scipy)
+       python3 tools/build-assets.py --only zombie   (zombie sheets only)
 """
 import json
 import os
@@ -25,6 +26,8 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 from scipy import ndimage
+
+import sprite_stabilizer as S   # tools/sprite_stabilizer.py: frame-by-frame sprite registration
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "assets" / "images"
@@ -660,49 +663,94 @@ HERO_GRIDS = {
     "backRun": "boy/ChatGPT Image Nov 5, 2026, 03_48_22 PM-9.png",
     "backJump": "boy/ChatGPT Image Nov 5, 2026, 03_48_24 PM-10.png",
 }
+HERO_IDLE = "boy/Side and Back Idle Animation Sprite Sheet.png"   # left half side, right half back
 CELL = 362
 COLS, ROWS = 4, 3
+HERO_SHADOW = CELL // 2       # constant shadow width: no pop when the sheet changes
+# How each sheet is stabilised (tools/sprite_stabilizer.py).  "plant": the
+# boots stay put, airborne frames (cheer / jump) keep their height above the
+# ground line of their grid row.  "body": in-place run, the head is the
+# anchor.  harmonics: loops keep 1 (idle sway / breathing) or 2 (two steps
+# per run cycle) smooth cycles of head motion; the rest is drawing noise.
+HERO_ANIM = {
+    "sideIdle": {"mode": "plant", "loop": True, "harmonics": 1},
+    "backIdle": {"mode": "plant", "loop": True, "harmonics": 1},
+    "sideRun": {"mode": "body", "loop": True, "harmonics": 2, "max_squash": 0.08},
+    "backRun": {"mode": "body", "loop": True, "harmonics": 2, "max_squash": 0.08},
+}
+HERO_HAZE = {"backCheer"}     # smoky background residue around the figure
+
+
+def _hero_frames(key):
+    """The 12 figures of a hero sheet, cleaned, each with the top-left of its
+    crop in the cell it had in the previous (unregistered) build - that is
+    what the game's hand / core offsets were measured on."""
+    if key in ("sideIdle", "backIdle"):
+        arr = stretch_alpha(load(HERO_IDLE), lo=30)
+        arr = keep_big_components(arr, thresh=140, min_area=6000, grow=3)
+        xa = 0 if key == "sideIdle" else 724
+        half = arr[:, xa:xa + 724]
+        figs = S.extract_grid(half, COLS, ROWS)
+        old = []
+        for k, (fig, x0, y0) in enumerate(figs):
+            # the old build centred each figure's column run in its cell
+            r, c = divmod(k, COLS)
+            band = half[r * CELL:(r + 1) * CELL]
+            rx0, rx1 = runs((band[:, :, 3] > 40).any(axis=0), min_len=60, merge_gap=12)[c]
+            old.append((x0 - rx0 + (CELL - (rx1 - rx0)) // 2, y0 - r * CELL))
+    else:
+        arr = load(HERO_GRIDS[key])
+        # component filter removes the haze blobs on the back-cheer sheet and
+        # the stray streak on the side-fear sheet
+        arr = keep_big_components(arr, thresh=140, min_area=6000, grow=3)
+        arr = stretch_alpha(arr, lo=30)
+        figs = S.extract_grid(arr[:ROWS * CELL, :COLS * CELL], COLS, ROWS)
+        old = [(x0 - (k % COLS) * CELL, y0 - (k // COLS) * CELL) for k, (_, x0, y0) in enumerate(figs)]
+    haze = key in HERO_HAZE
+    return [S.defringe(f, haze=haze) for f, _, _ in figs], old
 
 
 def build_hero():
+    """Hero sheets, re-registered frame by frame (see sprite_stabilizer).
+    The anchor keeps its old place on the body - CELL/2 right of and
+    0.95*CELL down from the cell corner in the old build, measured on the
+    idle sheets per view - so the game's hand / core offsets still hold, but
+    now it is the same point in every frame of every sheet."""
     print("hero")
-    for key, rel in HERO_GRIDS.items():
-        arr = load(rel)
-        # component filter removes the haze on the back-cheer sheet and the
-        # stray streak on the side-fear sheet; harmless on the clean sheets.
-        arr = keep_big_components(arr, thresh=140, min_area=6000, grow=3)
-        arr = stretch_alpha(arr, lo=30)
-        h, w = arr.shape[:2]
-        canvas = np.zeros((ROWS * CELL, COLS * CELL, 4), np.uint8)
-        canvas[:h, :w] = arr[: ROWS * CELL, : COLS * CELL]
-        MANIFEST["sprites"][f"hero.{key}"] = {
-            "src": save(canvas, f"hero/{key}.webp", 86),
-            "fw": CELL, "fh": CELL, "cols": COLS, "rows": ROWS, "frames": COLS * ROWS,
-            "anchorY": 0.95,
+    sheets = {k: _hero_frames(k) for k in ["sideIdle", "backIdle", *HERO_GRIDS]}
+    line0 = 0.95 * CELL
+    calib = {}
+    for view in ("side", "back"):
+        figs, old = sheets[f"{view}Idle"]
+        tr = S.track(figs, 300)
+        stand = float(np.median([m["ground"] - m["top"] for m in tr]))
+        calib[view] = {
+            "stand": stand,
+            # anchor offset from the boots, and how far the feet sat below the line
+            "dx": float(np.median([CELL / 2 - (o[0] + m["bx"]) for m, o in zip(tr, old)])),
+            "sink": float(np.median([(o[1] + m["ground"]) - line0 for m, o in zip(tr, old)])),
         }
+        print(f"  {view}: stand {stand:.0f}px, anchor {calib[view]['dx']:+.1f}px from the boots, feet {calib[view]['sink']:.1f}px below it")
+    for key, (figs, old) in sheets.items():
+        view = "side" if key.startswith("side") else "back"
+        cal = calib[view]
+        opt = dict(HERO_ANIM.get(key, {"mode": "plant", "loop": False}))
+        tr = S.track(figs, cal["stand"])
+        if opt["mode"] == "plant" and not opt["loop"]:
+            opt["lift"] = S.grid_lift([o[1] + m["ground"] for m, o in zip(tr, old)], COLS, cal["stand"])
+        if opt["mode"] == "body":
+            # keep the sheet's own average place of the anchor on the body
+            opt["x_offset"] = float(np.median([CELL / 2 - (o[0] + m["hx"]) for m, o in zip(tr, old)]))
+        print(f"  hero.{key}")
+        frames, anchors, info = S.stabilize(figs, cal["stand"], log=print, **opt)
+        dx = cal["dx"] if opt["mode"] == "plant" else 0.0
+        anchors = [(ax + dx, ay - cal["sink"]) for ax, ay in anchors]
+        sheet, meta = S.pack(frames, anchors)
+        MANIFEST["sprites"][f"hero.{key}"] = dict(
+            {"src": save(sheet, f"hero/{key}.webp", 86)}, **meta,
+            loop=bool(opt["loop"]), shadowW=HERO_SHADOW)
 
     build_hero_leap()
-
-    # Idle sheet: left half = side idle (4x3), right half = back idle (4x3), uneven spacing.
-    arr = stretch_alpha(load("boy/Side and Back Idle Animation Sprite Sheet.png"), lo=30)
-    arr = keep_big_components(arr, thresh=140, min_area=6000, grow=3)
-    for key, (xa, xb) in {"sideIdle": (0, 724), "backIdle": (724, 1448)}.items():
-        half = arr[:, xa:xb]
-        canvas = np.zeros((ROWS * CELL, COLS * CELL, 4), np.uint8)
-        for r in range(ROWS):
-            band = half[r * CELL:(r + 1) * CELL]
-            cols = runs((band[:, :, 3] > 40).any(axis=0), min_len=60, merge_gap=12)
-            assert len(cols) == 4, (key, r, cols)
-            for c, (x0, x1) in enumerate(cols):
-                fig = band[:, x0:x1]
-                fw = x1 - x0
-                dx = c * CELL + (CELL - fw) // 2
-                canvas[r * CELL:(r + 1) * CELL, dx:dx + fw] = fig
-        MANIFEST["sprites"][f"hero.{key}"] = {
-            "src": save(canvas, f"hero/{key}.webp", 86),
-            "fw": CELL, "fh": CELL, "cols": COLS, "rows": ROWS, "frames": COLS * ROWS,
-            "anchorY": 0.95,
-        }
 
 
 LEAP_W, LEAP_H = 420, 362          # wider cell: the mid-air strides are long
@@ -745,149 +793,448 @@ def build_hero_leap():
     MANIFEST["sprites"]["hero.sideLeap"] = {
         "src": save(canvas, "hero/sideLeap.webp", 86),
         "fw": LEAP_W, "fh": LEAP_H, "cols": 4, "rows": 3, "frames": 12,
-        "anchorY": 0.95,
+        "anchorY": 0.95, "shadowW": HERO_SHADOW,
     }
 
 
 # --------------------------------------------------------------------------- #
-# zombie
+# zombies
 # --------------------------------------------------------------------------- #
-def key_light_background(arr, band):
-    """Make the light reference-card background transparent (flood by component)."""
-    rgb = arr[:, :, :3].astype(int)
-    a = arr[:, :, 3]
-    light = (rgb.min(axis=2) > 200) & (a > 0)
-    lab, n = ndimage.label(light)
-    if n == 0:
-        return arr
-    y0, y1 = band
-    sizes = ndimage.sum(light[y0:y1], lab[y0:y1], range(1, n + 1))
-    bg_id = int(np.argmax(sizes)) + 1
-    bg = lab == bg_id
-    edge = ndimage.binary_dilation(bg, iterations=1) & ~bg
-    bright = rgb.mean(axis=2) > 185
-    out = arr.copy()
-    out[:, :, 3] = np.where(bg, 0, a)
-    soft = edge & bright
-    out[soft, 3] = (out[soft, 3] * 0.45).astype(np.uint8)
+# Two zombie skins share one set of animation names: "zombie.*" is the
+# messy-haired road worker (assets/images/zombi-1), "zombie2.*" the hard-hat
+# worker (assets/images/zombi-2).  The runtime picks a skin per wall
+# (ZD.Sprite.setSkin), so game code only ever names "zombie.<view>.<action>".
+#
+# The source sheets are AI-drawn: every figure is centred in its own cell and
+# different sheets are drawn at different sizes, which plays back as jiggle
+# and size pops.  So every frame is re-registered:
+#   * scale  - one factor per source image, from the figure's area (sqrt of
+#              its opaque pixels barely changes with pose), so every sheet of
+#              a skin matches its idle sheet and both skins share one standing
+#              height per view (Z_STAND);
+#   * x      - an anchor that should not move in the world: planted feet
+#              (idle, attack) or the torso = hi-vis vest (run, hit, die, leap);
+#   * y      - the lowest pixel sits on the ground line; airborne leap frames
+#              keep their torso a fixed `core` above it instead (that is the
+#              point the game flies along the arc through the circle).
+# Frames are re-packed into 4-column grids with the anchor at the cell's
+# horizontal centre and at anchorY, so flipping and the runtime anchor agree.
+
+Z_STAND = {"front": 330, "side": 340}   # standing height in sheet px
+Z_SCREEN = {"front": 145, "side": 188}  # standing height at sprite scale 1 (old art: 138 / 176)
+Z_PAD = 6
+
+
+def P(src, cols, rows, ref="all"):
+    """One source image: grid size, and the upright frames used to measure
+    its scale ("all" for sheets that never leave an upright pose)."""
+    return {"src": src, "cols": cols, "rows": rows, "ref": ref}
+
+
+# anchor: feet | torso | dead (match the last frame of `die`)
+# airborne: leap frames placed by torso height instead of feet
+# derive: build from another action's frames; hold: repeat every frame n times
+ZOMBIE_SRC = {
+    "zombie": {
+        "dir": "zombi-1",
+        "front": {
+            "idle": {"parts": [P("Idle — 8 frames (4×2).png", 4, 2)], "anchor": "feet", "loop": True},
+            "run": {"parts": [P("Complete running animation — 16 frames (4×4).png", 4, 4)], "anchor": "torso", "loop": True},
+            # 8 frames; held x2 so it lasts as long as the 16-frame zombie2 bang
+            "attack": {"parts": [P("image.png", 4, 2, [0, 4])], "anchor": "feet", "hold": 2},
+            "hit": {"parts": [P("image copy.png", 4, 2, [0, 7])], "anchor": "torso"},
+            "die": {"parts": [P("image copy 2.png", 4, 2, [0]), P("image copy 3.png", 4, 2, [0])], "anchor": "torso"},
+            "dead": {"parts": [P("image copy 4.png", 1, 1)], "anchor": "dead"},
+        },
+        "side": {
+            "idle": {"parts": [P("image copy 5.png", 4, 2)], "anchor": "feet", "loop": True},
+            "run": {"parts": [P("Complete 16-frame sheet side view.png", 4, 4)], "anchor": "torso", "loop": True},
+            "attack": {"parts": [P("Complete 16-frame sprite sheet attack side view.png", 4, 4, [0, 15])], "anchor": "feet"},
+            # part 2 frame 0 wears a dizzy halo on the hair: measure on 1-2
+            "die": {"parts": [P("image copy 6.png", 4, 2, [0]), P("image copy 7.png", 4, 2, [1, 2])], "anchor": "torso"},
+            # no side-hit sheet for this skin: the first beats of `die` there and
+            # back, ending on the struck pose (die / the run-back follow on)
+            "hit": {"derive": ("die", [0, 1, 2, 3, 4, 3, 2, 1]), "anchor": "torso"},
+            "dead": {"parts": [P("image copy 8.png", 1, 1)], "anchor": "dead"},
+            "leap": {"parts": [P("Complete 16-frame sprite sheet jumping inside of the wall.png", 4, 4, [12, 13, 14, 15])],
+                     "anchor": "torso", "airborne": [3, 4, 5, 6]},
+        },
+    },
+    "zombie2": {
+        "dir": "zombi-2",
+        "front": {
+            "idle": {"parts": [P("image.png", 4, 2)], "anchor": "feet", "loop": True},
+            "run": {"parts": [P("image copy.png", 4, 2)], "anchor": "torso", "loop": True},
+            "attack": {"parts": [P("image copy 2.png", 4, 2, [0, 4]), P("image copy 3.png", 4, 2, [0, 1])], "anchor": "feet"},
+            "hit": {"parts": [P("image copy 5.png", 4, 2, [0, 7])], "anchor": "torso"},
+            "die": {"parts": [P("image copy 4.png", 4, 2, [0]), P("image copy 6.png", 4, 2, [0])], "anchor": "torso"},
+            "dead": {"parts": [P("image copy 7.png", 1, 1)], "anchor": "dead"},
+        },
+        "side": {
+            "idle": {"parts": [P("image copy 8.png", 4, 2)], "anchor": "feet", "loop": True},
+            "run": {"parts": [P("image copy 9.png", 4, 2), P("image copy 10.png", 4, 2)], "anchor": "torso", "loop": True},
+            "attack": {"parts": [P("image copy 11.png", 4, 2, [0]), P("image copy 12.png", 4, 2, [7])], "anchor": "feet"},
+            "hit": {"parts": [P("image copy 13.png", 4, 2, [0, 7])], "anchor": "torso"},
+            "die": {"parts": [P("image copy 14.png", 4, 2, [0]), P("image copy 15.png", 4, 2, [0])], "anchor": "torso"},
+            "dead": {"parts": [P("image copy 16.png", 1, 1)], "anchor": "dead"},
+            "leap": {"parts": [P("image copy 18.png", 4, 2, [0, 1]), P("image copy 19.png", 4, 2, [6, 7])],
+                     "anchor": "torso", "airborne": [3, 4, 5, 6]},
+        },
+    },
+}
+# order matters: `hit` may derive from `die`, `dead` matches the end of `die`
+Z_ORDER = ["idle", "run", "attack", "die", "hit", "dead", "leap"]
+# Frame stabilisation (tools/sprite_stabilizer.py) on top of the registration
+# above: head tracked per frame, its path smoothed, a small feet-anchored
+# shear / stretch per frame removes the drawing's lean and bob jitter.  An
+# idle sways once per loop, a run cycle has two steps (two bobs) per loop.
+# die / dead / hit / leap keep the plain registration (the head turns over,
+# or the frames follow the game's arc), and so does the side attack: its
+# lunge carries the head further than the tracker follows (measured: the
+# boots slid 2-4 px with it, 0.7-1.3 px without).  Keys: "<view>.<action>"
+# or "<action>" for both views.
+Z_STAB = {
+    "idle": {"mode": "plant", "loop": True, "harmonics": 1},
+    "run": {"mode": "body", "loop": True, "harmonics": 2, "max_squash": 0.08},
+    "front.attack": {"mode": "plant", "loop": False},
+}
+
+
+def _hsv(rgb):
+    rgb = rgb.astype(np.float32) / 255
+    mx, mn = rgb.max(2), rgb.min(2)
+    d = mx - mn
+    r, g, b = rgb[..., 0], rgb[..., 1], rgb[..., 2]
+    h = np.zeros_like(mx)
+    m = d > 1e-6
+    rr = m & (mx == r)
+    gg = m & (mx == g) & ~rr
+    bb = m & ~rr & ~gg
+    h[rr] = ((g - b)[rr] / d[rr]) % 6
+    h[gg] = ((b - r)[gg] / d[gg]) + 2
+    h[bb] = ((r - g)[bb] / d[bb]) + 4
+    return h * 60, np.where(mx > 0, d / np.maximum(mx, 1e-6), 0), mx
+
+
+def _figures_in_grid(arr, cols, rows, near=45):
+    """Split a sheet into one isolated figure per cell.  Components are
+    assigned to the cell holding their centre (a figure may overhang its
+    cell); small bits (stars, dizzy swirls, impact marks) are kept when they
+    float near the figure, haze and specks are dropped."""
+    H, W = arr.shape[:2]
+    cw, ch = W / cols, H / rows
+    m = arr[:, :, 3] > 90
+    lab, n = ndimage.label(m)
+    sizes = ndimage.sum(m, lab, range(1, n + 1))
+    coms = ndimage.center_of_mass(m, lab, range(1, n + 1))
+    cells = {}
+    for i, (sz, (cy, cx)) in enumerate(zip(sizes, coms)):
+        if sz < 30:
+            continue
+        k = min(rows - 1, int(cy // ch)) * cols + min(cols - 1, int(cx // cw))
+        cells.setdefault(k, []).append((i + 1, sz))
+    objs = ndimage.find_objects(lab)
+    out = []
+    for k in range(cols * rows):
+        comps = cells.get(k)
+        assert comps, f"empty cell {k}"
+        big = max(s for _, s in comps)
+        main = [i for i, s in comps if s >= 0.2 * big]
+        # work in a window around the figure (dilating whole sheets is slow)
+        y0 = max(0, min(objs[i - 1][0].start for i, _ in comps) - near - 4)
+        y1 = min(H, max(objs[i - 1][0].stop for i, _ in comps) + near + 4)
+        x0 = max(0, min(objs[i - 1][1].start for i, _ in comps) - near - 4)
+        x1 = min(W, max(objs[i - 1][1].stop for i, _ in comps) + near + 4)
+        wl = lab[y0:y1, x0:x1]
+        around = ndimage.binary_dilation(np.isin(wl, main), iterations=near)
+        extra = [i for i, s in comps if i not in main and (around & (wl == i)).any()]
+        keep = ndimage.binary_dilation(np.isin(wl, main + extra), iterations=2)
+        fig = np.where(keep[:, :, None], arr[y0:y1, x0:x1], 0).astype(np.uint8)
+        out.append(_crop(_drop_painted_background(fig)))
     return out
 
 
-ZOMBIE_FRONT = {
-    "idle": ("zombi/zombie_front_idle.png", 8, True),
-    "run": ("zombi/zombie_front_run.png", 16, True),
-    "attack": ("zombi/zombie_front_attack.png", 16, False),
-    "hit": ("zombi/zombie_front_hit.png", 8, False),
-    "die": ("zombi/zombie_front_die.png", 16, False),
-    "dead": ("zombi/zombie_front_dead.png", 1, False),
-}
-ZOMBIE_SIDE = {
-    "idle": ("zombi/zombie_side_idle.png", 4, 2, True),
-    "run": ("zombi/zombie_side_run.png", 4, 4, True),
-    "attack": ("zombi/zombie_side_attack.png", 4, 4, False),
-    "hit": ("zombi/zombie_side_hit.png", 4, 2, False),
-    "die": ("zombi/zombie_side_die.png", 4, 4, False),
-    "dead": ("zombi/zombie_side_dead.png", 1, 1, False),
-}
-# Single-pose sheets are drawn at a different scale than their animations;
-# scaleAdjust tells the runtime how to match them to the last "die" frame.
-# The leap sheet is drawn a touch larger than the side run/attack sheets.
-SCALE_ADJUST = {"zombie.side.dead": 0.6, "zombie.front.dead": 0.22, "zombie.side.leap": 0.9}
+def _drop_painted_background(fig):
+    """Remove background the generator painted in as opaque pixels: pale grey
+    ground shadows under the feet, and near-white pockets (e.g. the gap
+    between the legs).  Both lie outside the outline, so they touch the
+    transparent background; grey or white parts of the figure itself (a
+    sneaker, eye whites) are enclosed by the outline and stay."""
+    a = fig[:, :, 3]
+    ys = np.nonzero((a > 90).any(1))[0]
+    if not len(ys):
+        return fig
+    y1 = ys[-1] + 1
+    hgt = y1 - ys[0]
+    rgb = fig[:, :, :3].astype(int)
+    chroma = rgb.max(2) - rgb.min(2)
+    lum = rgb.mean(2)
+    band = np.zeros(a.shape, bool)
+    band[max(0, y1 - int(0.2 * hgt)):y1] = True
+    # light neutrals anywhere (white pockets), mid greys near the ground
+    # (shadows); a blob is background when it is reached from the transparent
+    # area along a real edge, not through a one-pixel anti-aliasing gap
+    light = (a > 20) & (chroma < 35) & (rgb.min(2) > 170)
+    grey = band & (a > 20) & (chroma < 40) & (lum > 95) & (lum < 205)
+    clear_edge = ndimage.binary_dilation(a < 20, iterations=1)
+    out = fig.copy()
+    lab, n = ndimage.label(light | grey)
+    if not n:
+        return out
+    contact = ndimage.sum(clear_edge, lab, range(1, n + 1))
+    size = ndimage.sum(np.ones_like(a, bool), lab, range(1, n + 1))
+    drop = [i + 1 for i in range(n) if contact[i] >= 8 and size[i] >= 40]
+    out[np.isin(lab, drop)] = 0
+    # pockets closed off by the legs and the painted ground line: pure
+    # off-white, sizeable, below the waist (teeth, eyes and the vest stripe
+    # are tinted, small, or higher up)
+    pocket = (out[:, :, 3] > 20) & (chroma < 14) & (rgb.min(2) > 232)
+    pocket[: ys[0] + int(0.55 * hgt)] = False
+    lab, n = ndimage.label(pocket)
+    if n:
+        size = ndimage.sum(pocket, lab, range(1, n + 1))
+        out[np.isin(lab, [i + 1 for i in range(n) if size[i] >= 60])] = 0
+    return out
 
 
-def build_zombie_leap():
-    """zombi/image.png -> zombie.side.leap: the jump through the wall circle
-    at the hero.  4x4 grid of 320x384 cells, feet on y=348 in every cell:
-    0-1 crouch, 2-6 airborne, 7-11 land, 12-14 attack-ready (15 faces the
-    other way; unused).  Each frame is shifted so the shirt (the most stable
-    part of a leaping body) sits at the cell centre."""
-    arr = stretch_alpha(load("zombi/image.png"), lo=20)
-    arr = keep_big_components(arr, thresh=140, min_area=6000, grow=3)
-    FW, FH, COLS, ROWS = 320, 384, 4, 4
-    rgb = arr[:, :, :3].astype(int)
-    shirt = (rgb[:, :, 2] > 150) & (rgb[:, :, 2] > rgb[:, :, 0] + 30) & (arr[:, :, 3] > 200)
-    canvas = np.zeros_like(arr)
-    for r in range(ROWS):
-        for c in range(COLS):
-            ys, xs = slice(r * FH, (r + 1) * FH), slice(c * FW, (c + 1) * FW)
-            cell, sx = arr[ys, xs], np.nonzero(shirt[ys, xs])[1]
-            dx = int(round(FW / 2 - sx.mean())) if len(sx) else 0
-            src0, src1 = max(0, -dx), min(FW, FW - dx)
-            canvas[ys, c * FW + src0 + dx:c * FW + src1 + dx] = cell[:, src0:src1]
-    MANIFEST["sprites"]["zombie.side.leap"] = {
-        "src": save(canvas, "zombie/side-leap.webp", 86),
-        "fw": FW, "fh": FH, "cols": COLS, "rows": ROWS, "frames": COLS * ROWS, "loop": False,
-        "anchorY": round(348.5 / FH, 4), "facing": "left",
-    }
+def _crop(arr, pad=2):
+    ys, xs = np.nonzero(arr[:, :, 3] > 8)
+    y0, y1 = max(0, ys.min() - pad), min(arr.shape[0], ys.max() + 1 + pad)
+    x0, x1 = max(0, xs.min() - pad), min(arr.shape[1], xs.max() + 1 + pad)
+    return arr[y0:y1, x0:x1].copy()
+
+
+def _resize(arr, s):
+    """Premultiplied Lanczos resize (no dark or light halos at the edges)."""
+    h, w = arr.shape[:2]
+    nw, nh = max(1, round(w * s)), max(1, round(h * s))
+    a = arr[:, :, 3].astype(np.float32) / 255
+    pm = arr[:, :, :3].astype(np.float32) * a[:, :, None]
+    f = lambda ch: np.array(Image.fromarray(ch).resize((nw, nh), Image.LANCZOS))
+    al = np.clip(f(a), 0, 1)
+    rgb = np.stack([f(np.ascontiguousarray(pm[:, :, i])) for i in range(3)], 2) / np.maximum(al[:, :, None], 1e-3)
+    out = np.dstack([np.clip(rgb, 0, 255), al * 255])
+    out[al < 0.02] = 0
+    return out.round().astype(np.uint8)
+
+
+def _area(fig):
+    return float(np.sqrt((fig[:, :, 3] > 128).sum()))
+
+
+def _head(fig, band):
+    """Width of the head (hair / hard hat): the widest blob in the top `band`
+    rows of the main body.  The head is rigid, so it is the best ruler for
+    matching sizes across sheets; floating stars/swirls are ignored."""
+    a = fig[:, :, 3] > 128
+    lab, n = ndimage.label(a)
+    if not n:
+        return np.nan
+    body = lab == (int(np.argmax(ndimage.sum(a, lab, range(1, n + 1)))) + 1)
+    y0 = int(np.nonzero(body.any(1))[0][0])
+    top = np.zeros_like(body)
+    top[y0:y0 + int(band)] = body[y0:y0 + int(band)]
+    lab, n = ndimage.label(top)
+    if not n:
+        return np.nan
+    sl = ndimage.find_objects(lab)[int(np.argmax(ndimage.sum(top, lab, range(1, n + 1))))]
+    return float(sl[1].stop - sl[1].start)
+
+
+def _head_scale(figs, s, stand, head_ref):
+    """Correct an area-based scale `s` so the median head width of `figs`
+    matches the idle sheet's (`head_ref`, in output px).  Clamped: a sheet
+    drawn in a very different pose must not be blown up or shrunk."""
+    band = 0.18 * stand / s
+    hw = np.array([_head(f, band) * s for f in figs])
+    hw = hw[np.isfinite(hw)]
+    hw = hw[(hw > 0.6 * head_ref) & (hw < 1.5 * head_ref)]
+    if not len(hw):
+        return s
+    return s * float(np.clip(head_ref / np.median(hw), 0.8, 1.25))
+
+
+def _measure(fig, stand):
+    """Anchors of one scaled figure (cell-local px)."""
+    a = fig[:, :, 3] > 90
+    ys, xs = np.nonzero(a)
+    y0, y1, x0, x1 = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
+    h, s, v = _hsv(fig[:, :, :3])
+    vest = (fig[:, :, 3] > 200) & (h > 8) & (h < 32) & (s > 0.6) & (v > 0.75)
+    lab, n = ndimage.label(vest)
+    if n:
+        sizes = ndimage.sum(vest, lab, range(1, n + 1))
+        vest = np.isin(lab, [i + 1 for i, sz in enumerate(sizes) if sz >= 0.25 * sizes.max()])
+    if vest.sum() > 50:
+        ty, tx = ndimage.center_of_mass(vest)
+    else:
+        ty, tx = ndimage.center_of_mass(a)
+    # feet: the bottom band, laces / thin strands opened away
+    band = np.zeros_like(a)
+    bh = max(6, int(0.07 * stand))
+    band[max(0, y1 - bh):y1] = a[max(0, y1 - bh):y1]
+    opened = ndimage.binary_opening(band, structure=np.ones((5, 5)))
+    fx = ndimage.center_of_mass(opened if opened.sum() > 20 else band)[1]
+    return {"x0": x0, "x1": x1, "y0": y0, "y1": y1, "tx": tx, "ty": ty, "fx": fx, "cx": (x0 + x1) / 2}
+
+
+def _place(frames, anchors, loop):
+    """Pack figures into a 4-column grid; anchor (ax, ay) -> cell centre x,
+    shared anchor line y.  Returns (canvas, manifest fields)."""
+    left = max(ax - m["x0"] for (ax, ay), m in anchors)
+    right = max(m["x1"] - ax for (ax, ay), m in anchors)
+    top = max(ay - m["y0"] for (ax, ay), m in anchors)
+    bottom = max(0, max(m["y1"] - ay for (ax, ay), m in anchors))
+    half = int(np.ceil(max(left, right))) + Z_PAD
+    fw = 2 * half
+    fh = int(np.ceil(top + bottom)) + 2 * Z_PAD
+    fh += fh % 2
+    line = Z_PAD + int(np.ceil(top))
+    n = len(frames)
+    cols = min(4, n)
+    rows = (n + cols - 1) // cols
+    canvas = np.zeros((rows * fh, cols * fw, 4), np.uint8)
+    for k, (fig, ((ax, ay), m)) in enumerate(zip(frames, anchors)):
+        r, c = divmod(k, cols)
+        dx = int(round(half - ax))
+        dy = int(round(line - ay))
+        h, w = fig.shape[:2]
+        sy0, sx0 = max(0, -dy), max(0, -dx)
+        sy1, sx1 = min(h, fh - dy), min(w, fw - dx)
+        cell = canvas[r * fh:(r + 1) * fh, c * fw:(c + 1) * fw]
+        src = fig[sy0:sy1, sx0:sx1]
+        dst = cell[dy + sy0:dy + sy1, dx + sx0:dx + sx1]
+        np.copyto(dst, src, where=src[:, :, 3:4] > dst[:, :, 3:4])
+    return canvas, {"fw": fw, "fh": fh, "cols": cols, "rows": rows, "frames": n, "loop": loop,
+                    "anchorY": round(line / fh, 4)}
+
+
+def _skin_sheets(skin, cfg, view):
+    """Registered frames for one skin + view: {action: (frames, anchors, spec)}."""
+    stand = Z_STAND[view]
+    base = SRC / cfg["dir"]
+    raw = {}
+    for act in Z_ORDER:
+        spec = cfg[view].get(act)
+        if not spec or "parts" not in spec:
+            continue
+        parts = []
+        for p in spec["parts"]:
+            arr = np.array(Image.open(base / p["src"]).convert("RGBA"))
+            figs = _figures_in_grid(stretch_alpha(arr, lo=20, hi=200), p["cols"], p["rows"])
+            # matting specks and white-tinted edges differ per frame and sparkle
+            figs = [S.defringe(f) for f in figs]
+            parts.append((p, figs))
+        raw[act] = parts
+    # scale: idle sets the skin's standing height, everything else matches its area
+    idle = [f for _, figs in raw["idle"] for f in figs]
+    s_idle = stand / float(np.median([f.shape[0] - 4 for f in idle]))
+    a_idle = float(np.median([_area(f) for f in idle]))
+    head_idle = float(np.nanmedian([_head(f, 0.18 * stand / s_idle) * s_idle for f in idle]))
+    out = {}
+    for act in Z_ORDER:
+        spec = cfg[view].get(act)
+        if not spec:
+            continue
+        if "derive" in spec:
+            src_act, idx = spec["derive"]
+            sf, sa, _ = out[src_act]
+            out[act] = ([sf[i] for i in idx], [sa[i] for i in idx], spec)
+            continue
+        frames, meas, srcs, scales = [], [], [], []
+        for p, figs in raw[act]:
+            if spec["anchor"] == "dead":
+                # match the last frame of `die` (the pose it settles into)
+                last_f = out["die"][0][-1]
+                s = _area(last_f) / _area(figs[0])
+            else:
+                refs = figs if p["ref"] == "all" else [figs[i] for i in p["ref"]]
+                s = s_idle * a_idle / float(np.median([_area(f) for f in refs]))
+                if act != "idle":
+                    s = _head_scale(refs, s, stand, head_idle)
+            for f in figs:
+                g = _resize(f, s)
+                frames.append(g)
+                srcs.append(f)
+                scales.append(s)
+                meas.append(_measure(g, stand))
+        anchors = []
+        for k, m in enumerate(meas):
+            if spec["anchor"] == "feet":
+                ax = m["fx"]
+            elif spec["anchor"] == "dead":
+                # same bbox-centre offset from the anchor as die's last frame
+                (dax, _), dm = out["die"][1][-1]
+                ax = m["cx"] - (dm["cx"] - dax)
+            else:
+                ax = m["tx"]
+            anchors.append([ax, m["y1"]])
+        stab = Z_STAB.get(f"{view}.{act}") or Z_STAB.get(act)
+        if stab:
+            opt = dict(stab)
+            if opt["mode"] == "body":
+                opt["torso_x"] = [m["tx"] for m in meas]   # anchor stays on the vest
+            print(f"  {skin}.{view}.{act}")
+            frames, st, _ = S.stabilize(frames, stand, src=srcs, src_scale=scales, log=print, **opt)
+            meas = [_measure(g, stand) for g in frames]
+            # the stabilizer's anchors are steady frame to frame; shift them as
+            # a whole onto this file's convention (feet centroid / lowest
+            # pixel) so the idle -> hit -> die hand-overs stay seamless
+            dx = float(np.median([m["fx"] - a[0] for m, a in zip(meas, st)])) if opt["mode"] == "plant" else 0.0
+            dy = float(np.median([m["y1"] - a[1] for m, a in zip(meas, st)]))
+            anchors = [[a[0] + dx, a[1] + dy] for a in st]
+        if "airborne" in spec:
+            # take-off frame (first airborne - 1) defines the torso height
+            t0 = spec["airborne"][0] - 1
+            core = meas[t0]["y1"] - meas[t0]["ty"]
+            for k in spec["airborne"]:
+                anchors[k][1] = meas[k]["ty"] + core
+            spec = dict(spec, core=core)
+        hold = spec.get("hold", 1)
+        frames = [f for f in frames for _ in range(hold)]
+        pairs = [(tuple(a), m) for a, m in zip(anchors, meas) for _ in range(hold)]
+        out[act] = (frames, pairs, spec)
+    return out
 
 
 def build_zombie():
     print("zombie")
-    for key, (rel, expected, loop) in ZOMBIE_FRONT.items():
-        raw = load(rel)
-        h, w = raw.shape[:2]
-        band = (54, h - 40)
-        # Frame centres come from the lavender number pills under each frame
-        # (figures may touch each other, pills never do).
-        foot = raw[h - 38:h - 8].astype(int)
-        spread = foot[:, :, :3].max(axis=2) - foot[:, :, :3].min(axis=2)
-        pill = (foot[:, :, 3] > 0) & (spread > 14) & (foot[:, :, :3].mean(axis=2) > 120)
-        pills = runs(pill.any(axis=0), min_len=18, merge_gap=8)
-        centers = [(x0 + x1) / 2 for x0, x1 in pills]
-        if expected > 1 and len(centers) != expected:
-            # a merged or split pill: rebuild the centres from the median spacing
-            gaps = np.diff(centers)
-            step = float(np.median(gaps)) if len(gaps) else 0
-            print(f"  note {key}: found {len(centers)} pills, expected {expected}; using median spacing {step:.1f}")
-            centers = [centers[0] + i * step for i in range(expected)]
-        arr = key_light_background(raw, band)
-        strip = arr[band[0]:band[1]]
-        strip = keep_big_components(strip, thresh=60, min_area=400, grow=2)
-        if len(centers) > 1:
-            spacing = (centers[-1] - centers[0]) / (len(centers) - 1)
-        else:
-            x0, _, x1, _ = bbox(strip)
-            spacing = (x1 - x0) + 8
-            centers = [(x0 + x1) / 2]
-        fw = int(round(spacing)) + 4
-        fh = strip.shape[0]
-        canvas = np.zeros((fh, fw * len(centers), 4), np.uint8)
-        for i, c in enumerate(centers):
-            x0 = int(round(c - fw / 2))
-            x1 = x0 + fw
-            sx0, sx1 = max(x0, 0), min(x1, w)
-            fig = strip[:, sx0:sx1]
-            dx = i * fw + (sx0 - x0)
-            canvas[:, dx:dx + fig.shape[1]] = fig
-        cols = centers
-        MANIFEST["sprites"][f"zombie.front.{key}"] = {
-            "src": save(canvas, f"zombie/front-{key}.webp", 86),
-            "fw": fw, "fh": fh, "cols": len(cols), "rows": 1, "frames": len(cols), "loop": loop,
-            "anchorY": 0.97,
-        }
-
-    for key, (rel, cols, rows, loop) in ZOMBIE_SIDE.items():
-        arr = stretch_alpha(load(rel), lo=20)
-        h, w = arr.shape[:2]
-        fw, fh = w // cols, h // rows
-        MANIFEST["sprites"][f"zombie.side.{key}"] = {
-            "src": save(arr, f"zombie/side-{key}.webp", 86),
-            "fw": fw, "fh": fh, "cols": cols, "rows": rows, "frames": cols * rows, "loop": loop,
-            "anchorY": 0.83, "facing": "left",
-        }
-    build_zombie_leap()
+    for key in [k for k in MANIFEST["sprites"] if k.split(".")[0] in ZOMBIE_SRC]:
+        del MANIFEST["sprites"][key]
+    for skin, cfg in ZOMBIE_SRC.items():
+        for view in ("front", "side"):
+            sheets = _skin_sheets(skin, cfg, view)
+            for act, (frames, pairs, spec) in sheets.items():
+                canvas, meta = _place(frames, pairs, bool(spec.get("loop")))
+                meta["scaleAdjust"] = round(Z_SCREEN[view] / Z_STAND[view], 4)
+                # one shadow size per view (cell widths differ per sheet)
+                meta["shadowW"] = round(0.55 * Z_STAND[view])
+                if view == "side":
+                    meta["facing"] = "left"
+                if "core" in spec:
+                    meta["core"] = round(float(spec["core"]), 1)
+                if act == "run" and view == "side":
+                    # feet -> torso height while running (the throw-back arc)
+                    meta["core"] = round(float(np.median([a[1] - m["ty"] for a, m in pairs])), 1)
+                rel = f"{skin}/{view}-{act}.webp"
+                MANIFEST["sprites"][f"{skin}.{view}.{act}"] = dict({"src": save(canvas, rel, 86)}, **meta)
+                print(f"  {skin}.{view}.{act}: {meta['frames']} frames {meta['fw']}x{meta['fh']}")
 
 
 # --------------------------------------------------------------------------- #
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
-    build_layers()
-    build_walls()
-    build_hero()
-    build_zombie()
-    for key, adj in SCALE_ADJUST.items():
-        if key in MANIFEST["sprites"]:
-            MANIFEST["sprites"][key]["scaleAdjust"] = adj
+    only = {"zombie": lambda: build_zombie(), "hero": lambda: build_hero()}
+    if sys.argv[1:2] == ["--only"] and sys.argv[2:3] and sys.argv[2] in only:
+        # rebuild just these sheets into the existing manifest
+        with open(OUT / "manifest.json") as f:
+            MANIFEST.update(json.load(f))
+        only[sys.argv[2]]()
+    else:
+        build_layers()
+        build_walls()
+        build_hero()
+        build_zombie()
     with open(OUT / "manifest.json", "w") as f:
         json.dump(MANIFEST, f, indent=1)
     # Classic-script copy so the game also runs from file:// (no fetch/CORS).

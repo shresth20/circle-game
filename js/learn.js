@@ -10,7 +10,6 @@ window.ZD = window.ZD || {};
   const T = (k, v) => ZD.T(k, v);
   const geo = ZD.geo;
   const D = (ms) => ZD.scene.D(ms);
-  const reduced = () => ZD.scene.settings.reducedMotion;
 
   /* Feedback colours (used only AFTER answering, never on the buttons). */
   const COLORS = { arc: '#ff8fb1', radius: '#9dffb0', chord: '#e9dcff', half: 'rgba(255,255,255,0.85)' };
@@ -66,11 +65,6 @@ window.ZD = window.ZD || {};
     return {
       el: root,
       play() {
-        if (reduced()) {
-          place(1);
-          [fit, parts, halfLine, halfLabel].forEach((n2) => n2.setAttribute('opacity', 1));
-          return Promise.resolve();
-        }
         const o = { t: 0 };
         tl = anime.timeline({ easing: 'easeOutCubic' });
         tl.add({ targets: o, t: 1, duration: D(900), delay: D(250), easing: 'easeInOutCubic', update: () => place(o.t), complete: () => ZD.audio.play('lock') })

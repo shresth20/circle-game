@@ -19,7 +19,6 @@ window.ZD = window.ZD || {};
       side.setTarget(null);
       ZD.ui.showHud(false);
       const A = ZD.assets;
-      const still = ZD.scene.settings.reducedMotion;
       const ov = document.getElementById('title');
       ov.innerHTML = '';
       ov.className = 'overlay title welcome visible';
@@ -28,28 +27,22 @@ window.ZD = window.ZD || {};
       const logoArt = A.image('welcomeLogo');
       const logo = el('div', { class: 'welcome-logo', role: 'img', 'aria-label': T('appTitle'), style: { backgroundImage: `url("${A.imageUrl('welcomeLogo')}")`, aspectRatio: `${logoArt.w} / ${logoArt.h}` } });
       // play button art (assets/images/image copy.png via build_start_button)
-      // with pulse rings radiating from its disc; the inner span breathes,
-      // the button itself pops in / presses
-      // .play-art takes hover / press, its inner .play-img does the "tap me" beat (CSS)
+      // over a soft glow; .play-art takes hover / press, its inner .play-img
+      // does the gentle "tap me" heartbeat (CSS)
       const art = el('span', { class: 'play-art' }, [el('span', { class: 'play-img', style: { backgroundImage: `url("${A.imageUrl('startButton')}")` } })]);
-      const btn = el('button', { class: 'play-btn', 'aria-label': T('btnPlay') }, [el('span', { class: 'play-glow' }), el('span', { class: 'play-pulse' }), el('span', { class: 'play-pulse late' }), art]);
+      const btn = el('button', { class: 'play-btn', 'aria-label': T('btnPlay') }, [el('span', { class: 'play-glow' }), art]);
       ov.append(logo, btn);
       const loops = [];
       if (loader) {
         // swap: the logo is already showing; the loading bar gives way to the button
         logo.style.opacity = 1;
         const slot = loader.querySelector('.welcome-slot');
-        if (still) loader.remove();
-        else await anime({ targets: slot, opacity: 0, scale: 0.92, duration: 220, easing: 'easeInQuad' }).finished.then(() => loader.remove());
+        await anime({ targets: slot, opacity: 0, scale: 0.92, duration: 220, easing: 'easeInQuad' }).finished.then(() => loader.remove());
       }
-      if (still) {
-        [logo, btn].forEach((n) => (n.style.opacity = 1));
-      } else {
-        if (!loader) anime({ targets: logo, translateY: [-80, 0], scale: [0.85, 1], opacity: [0, 1], duration: 900, easing: 'easeOutElastic(1, .7)' });
-        anime({ targets: btn, scale: [0.3, 1], opacity: [0, 1], duration: 520, delay: loader ? 0 : 550, easing: 'easeOutBack' });
-        // idle: the logo floats, the button breathes (transform only)
-        loops.push(anime({ targets: logo, translateY: [0, -10], duration: 1800, delay: loader ? 0 : 950, direction: 'alternate', loop: true, easing: 'easeInOutSine' }));
-      }
+      if (!loader) anime({ targets: logo, translateY: [-80, 0], scale: [0.85, 1], opacity: [0, 1], duration: 900, easing: 'easeOutElastic(1, .7)' });
+      anime({ targets: btn, scale: [0.3, 1], opacity: [0, 1], duration: 520, delay: loader ? 0 : 550, easing: 'easeOutBack' });
+      // idle: the logo floats (transform only)
+      loops.push(anime({ targets: logo, translateY: [0, -10], duration: 1800, delay: loader ? 0 : 950, direction: 'alternate', loop: true, easing: 'easeInOutSine' }));
       await new Promise((res) => {
         const go = () => {
           ZD.audio.unlock();
@@ -61,10 +54,8 @@ window.ZD = window.ZD || {};
       });
       loops.forEach((a) => a.pause());
       anime.remove([logo, btn, art]);
-      if (!still) {
-        anime({ targets: btn, scale: [1, 0.9], duration: 120, easing: 'easeInQuad' });
-        await anime({ targets: [logo, btn], opacity: 0, duration: 300, delay: 80, easing: 'easeInQuad' }).finished;
-      }
+      anime({ targets: btn, scale: [1, 0.9], duration: 120, easing: 'easeInQuad' });
+      await anime({ targets: [logo, btn], opacity: 0, duration: 300, delay: 80, easing: 'easeInQuad' }).finished;
       ov.classList.remove('visible', 'welcome');
       ov.innerHTML = '';
     },

@@ -54,8 +54,12 @@ window.ZD = window.ZD || {};
     l.node.style.transform = `translateX(${wrapX(l.x - px * l.factor - l.drift, l.w) - l.x}px)${l.flip ? ' scaleX(-1)' : ''}`;
   }
 
-  const settings = { reducedMotion: ZD.prefs.get('reducedMotion', window.matchMedia('(prefers-reduced-motion: reduce)').matches) };
-  const D = (ms) => (settings.reducedMotion ? Math.round(ms * 0.55) : ms);
+  /* Every animation always plays in full (no reduced-motion mode).  D() is
+     the one place to tune the game's overall animation timing. */
+  const settings = {};
+  const D = (ms) => ms;
+  // forget the setting from the removed reduced-motion option
+  try { localStorage.removeItem('zd.reducedMotion'); } catch (e) {}
 
   let uid = 0;
 
@@ -129,6 +133,242 @@ window.ZD = window.ZD || {};
     const span = WORLD_W + w;
     let v = ((x - WORLD_X + w) % span + span) % span;
     return v - w + WORLD_X;
+  }
+
+  /* ----------------------------------------------------------------------- */
+  /* endless scenery                                                         */
+  /* ----------------------------------------------------------------------- */
+  /* The run between walls never repeats: the land beside the road is
+     generated from the distance travelled.  The world is split into zones,
+     one per wall (ZONE_LEN = the run between walls in game.js, centred on
+     each wall), and each zone has a biome that sets which props appear and
+     how densely, so the land changes during every run: a grove of dead
+     trees, an outpost with watchtowers, a rocky stretch, open grassland.
+     Everything is seeded, so a spot always looks the same. */
+  const ZONE_LEN = 1750;
+  const BIOMES = ['grove', 'outpost', 'rocky', 'wild'];
+  const DRY_TREES = ['dryTree1', 'dryTree2', 'dryTree3', 'dryTree4', 'dryTree5', 'dryTree6', 'dryTree7', 'dryTree8', 'dryTree9', 'dryTree10', 'dryTree11', 'dryTree12'];
+  const GRASS_S = ['grass3', 'grass4', 'grass5', 'grass6', 'grass7'];
+  const GRASS_L = ['grass1', 'grass2', 'grass3'];
+  const ROCK_S = ['rock5', 'rock6', 'rock7', 'rock8'];
+  const ROCK_L = ['rock1', 'rock2', 'rock3', 'rock4'];
+
+  function hash32(a, b) {
+    let h = Math.imul(a | 0, 374761393) + Math.imul(b | 0, 668265263);
+    h = Math.imul(h ^ (h >>> 13), 1274126177);
+    return (h ^ (h >>> 16)) >>> 0;
+  }
+
+  /* small seeded random source (mulberry32) */
+  function seeded(seed) {
+    let s = seed >>> 0;
+    const next = () => {
+      s = (s + 0x6d2b79f5) | 0;
+      let t = Math.imul(s ^ (s >>> 15), 1 | s);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    next.range = (a, b) => a + (b - a) * next();
+    next.pick = (arr) => arr[Math.floor(next() * arr.length)];
+    next.chance = (p) => next() < p;
+    return next;
+  }
+
+  /* Biome of the zone around travel distance `dist`.  Zone 0 (the first
+     wall) is 'home', the hand-placed opening.  After that the biomes come in
+     shuffled rounds of four, so every four walls show all four and the same
+     biome never comes twice in a row. */
+  const biomeSeq = [];
+  function biomeAt(dist) {
+    const z = Math.floor(dist / ZONE_LEN + 0.5);
+    if (z <= 0) return 'home';
+    while (biomeSeq.length < z) {
+      const rnd = seeded(hash32(biomeSeq.length, 7));
+      const round = BIOMES.slice();
+      for (let i = round.length - 1; i > 0; i--) {
+        const j = Math.floor(rnd() * (i + 1));
+        [round[i], round[j]] = [round[j], round[i]];
+      }
+      if (round[0] === biomeSeq[biomeSeq.length - 1]) round.push(round.shift());
+      biomeSeq.push(...round);
+    }
+    return biomeSeq[z - 1];
+  }
+
+  /* One parallax band of generated props.  The band is cut into chunks of
+     `chunk` layer px; a chunk's props are built from its own seed when it
+     scrolls into view and removed when it leaves, so the band is endless and
+     only what is on screen is in the DOM.  The whole band moves with one
+     transform.  gen(rnd, x, biome) -> { item: {key, y, scale, flip} | null, gap }
+     walks each chunk left to right.  `anchors` are fixed hand-placed props
+     (the opening composition); generated props keep clear of them. */
+  class Scatter {
+    constructor({ factor, z, cls = '', chunk = 1200, seed, gen, anchors = [], clear = 0 }) {
+      this.factor = factor;
+      this.chunk = chunk;
+      this.seed = seed;
+      this.gen = gen;
+      this.clear = clear;
+      this.node = el('div', { class: 'scatter ' + cls, style: { zIndex: z } });
+      this.anchors = anchors.map((a) => Object.assign({ w: A.image(a.key).w * a.scale }, a));
+      this.anchors.forEach((a) => this.node.appendChild(this._item(a, a.x)));
+      this.chunks = new Map();
+    }
+
+    _item({ key, y, scale, flip }, x) {
+      const n = propLayer(key, { x: Math.round(x), y: Math.round(y), scale, flip }).node;
+      n.style.zIndex = Math.round(y); // nearer (lower) props overlap farther ones
+      return n;
+    }
+
+    _build(i) {
+      const rnd = seeded(hash32(this.seed, i));
+      const x1 = (i + 1) * this.chunk;
+      const nodes = [];
+      let x = i * this.chunk + rnd.range(0, 90);
+      while (x < x1) {
+        // a prop's biome is the zone the camera is in when it passes mid-screen
+        const { item, gap } = this.gen(rnd, x, biomeAt((x - STAGE_W / 2) / this.factor));
+        if (item) {
+          const w = A.image(item.key).w * item.scale;
+          const hit = this.anchors.some((a) => x < a.x + a.w + this.clear && x + w > a.x - this.clear);
+          if (!hit) {
+            const n = this._item(item, x);
+            this.node.appendChild(n);
+            nodes.push(n);
+          }
+        }
+        x += gap;
+      }
+      return nodes;
+    }
+
+    update(scroll) {
+      const wx = scroll * this.factor;
+      this.node.style.transform = `translateX(${-wx}px)`;
+      // props are at most ~800px wide, so a chunk left of the window by more
+      // than that can no longer be seen
+      const lo = Math.floor((wx + WORLD_X - 800) / this.chunk);
+      const hi = Math.floor((wx + WORLD_X + WORLD_W) / this.chunk);
+      for (const [i, nodes] of this.chunks) {
+        if (i < lo || i > hi) {
+          nodes.forEach((n) => n.remove());
+          this.chunks.delete(i);
+        }
+      }
+      for (let i = lo; i <= hi; i++) if (!this.chunks.has(i)) this.chunks.set(i, this._build(i));
+    }
+  }
+
+  /* Gap ranges per biome: [min, max] layer px between props. */
+  const gapOf = (rnd, table, biome) => rnd.range(...table[biome]);
+
+  /* SIDE view bands, far to near.  y = baseline (stage px). */
+  function sideScatter(road) {
+    const vb = road.bottom;
+    return {
+      // distant dead trees (and watchtowers at outposts) seen through the fence
+      far: new Scatter({
+        factor: 0.32, z: 6, cls: 'far distant', chunk: 1000, seed: 11,
+        gen: (rnd, x, b) => {
+          const gap = gapOf(rnd, { home: [380, 700], grove: [110, 240], outpost: [300, 560], rocky: [520, 900], wild: [240, 460] }, b);
+          if (b === 'outpost' && rnd.chance(0.3)) return { gap: gap + 120, item: { key: 'tower', y: rnd.range(704, 712), scale: rnd.range(0.34, 0.4), flip: rnd.chance(0.5) } };
+          if (!rnd.chance(b === 'rocky' ? 0.5 : 0.9)) return { gap };
+          return { gap, item: { key: rnd.pick(DRY_TREES), y: rnd.range(698, 712), scale: rnd.range(0.38, 0.56), flip: rnd.chance(0.5) } };
+        },
+      }),
+      // big trees and watchtowers just behind the fence
+      mid: new Scatter({
+        factor: 0.55, z: 6, cls: 'mid', chunk: 1400, seed: 23, clear: 380,
+        anchors: [
+          { key: 'tower', x: 40, y: 762, scale: 0.74 },
+          { key: 'tree', x: 1420, y: 800, scale: 0.9 },
+        ],
+        gen: (rnd, x, b) => {
+          const gap = gapOf(rnd, { home: [800, 1200], grove: [240, 460], outpost: [520, 880], rocky: [760, 1250], wild: [440, 780] }, b);
+          if (b === 'outpost' && rnd.chance(0.38)) return { gap: gap + 200, item: { key: 'tower', y: rnd.range(756, 768), scale: rnd.range(0.64, 0.76), flip: rnd.chance(0.5) } };
+          if ((b === 'wild' && rnd.chance(0.28)) || (b === 'rocky' && rnd.chance(0.22))) return { gap: gap + 380, item: { key: 'tree', y: rnd.range(790, 806), scale: rnd.range(0.7, 0.9), flip: rnd.chance(0.5) } };
+          if (b === 'rocky' && rnd.chance(0.35)) return { gap };
+          return { gap, item: { key: rnd.pick(DRY_TREES), y: rnd.range(744, 792), scale: rnd.range(0.86, 1.24), flip: rnd.chance(0.5) } };
+        },
+      }),
+      // grass and pebbles along the road's back edge
+      road: new Scatter({
+        factor: 1, z: 9, seed: 37,
+        gen: (rnd, x, b) => {
+          const gap = gapOf(rnd, { home: [170, 380], grove: [160, 340], outpost: [190, 400], rocky: [110, 250], wild: [100, 230] }, b);
+          const rock = rnd.chance({ rocky: 0.65, wild: 0.2 }[b] || 0.4);
+          return { gap, item: rock ? { key: rnd.pick(ROCK_S), y: road.back + 14 + rnd.range(-2, 3), scale: rnd.range(0.34, 0.46), flip: rnd.chance(0.5) } : { key: rnd.pick(GRASS_S), y: road.back + 14 + rnd.range(-2, 3), scale: rnd.range(0.42, 0.56), flip: rnd.chance(0.5) } };
+        },
+      }),
+      // the dirt verge below the road
+      verge: new Scatter({
+        factor: 1, z: 9, seed: 41,
+        gen: (rnd, x, b) => {
+          const gap = gapOf(rnd, { home: [180, 340], grove: [170, 320], outpost: [190, 360], rocky: [120, 260], wild: [110, 230] }, b);
+          const rock = rnd.chance({ rocky: 0.6, wild: 0.2 }[b] || 0.35);
+          const y = vb + rnd.range(10, 30);
+          return { gap, item: rock ? { key: rnd.pick(ROCK_S), y, scale: rnd.range(0.44, 0.58), flip: rnd.chance(0.5) } : { key: rnd.pick(GRASS_S), y, scale: rnd.range(0.5, 0.66), flip: rnd.chance(0.5) } };
+        },
+      }),
+      // big rocks and tufts nearest the camera (a touch faster than the road)
+      fore: new Scatter({
+        factor: 1.14, z: 9, seed: 53,
+        gen: (rnd, x, b) => {
+          const gap = gapOf(rnd, { home: [380, 760], grove: [400, 800], outpost: [380, 760], rocky: [260, 520], wild: [280, 560] }, b);
+          if (rnd.chance(0.12)) return { gap };
+          const rock = rnd.chance({ rocky: 0.7, wild: 0.3 }[b] || 0.5);
+          return { gap, item: rock ? { key: rnd.pick(ROCK_L), y: rnd.range(1080, 1106), scale: rnd.range(0.55, 0.74), flip: rnd.chance(0.5) } : { key: rnd.pick(GRASS_L), y: rnd.range(1084, 1100), scale: rnd.range(0.6, 0.82), flip: rnd.chance(0.5) } };
+        },
+      }),
+    };
+  }
+
+  /* FRONT view: the land beside the road for one wall, matching the biome
+     the hero has run into.  Props stay outside the road + fences (road half-
+     width 742 * (y - 610) / 470 at baseline y, see FRONT_CAM in
+     tools/build-assets.py).  Returns [key, left x, baseline y, scale, flip]. */
+  function frontScenery(rnd, biome) {
+    const out = [];
+    const hw = (y) => (742 * Math.max(0, y - 610)) / 470;
+    // a random left x beside the road (left or right side) for a prop of width w
+    // (mostly inside the 16:9 frame; a little spills into the 20:9 margins)
+    const spot = (w, y) => {
+      const pad = 60 + hw(y) * 0.12;
+      const left = [-120 - w * 0.3, 960 - hw(y) - pad - w];
+      const right = [960 + hw(y) + pad, STAGE_W + 120 - w * 0.7];
+      const sides = [left, right].filter(([a, b]) => b > a);
+      if (!sides.length) return null;
+      const [a, b] = rnd.pick(sides);
+      return rnd.range(a, b);
+    };
+    const add = (key, y, scale) => {
+      const x = spot(A.image(key).w * scale, y);
+      if (x != null) out.push([key, Math.round(x), Math.round(y), scale, rnd.chance(0.5)]);
+    };
+    const nFar = { grove: [5, 7], outpost: [3, 4], rocky: [1, 3], wild: [3, 5] }[biome];
+    const nTrees = { grove: [7, 9], outpost: [3, 5], rocky: [2, 4], wild: [4, 6] }[biome];
+    const nGround = { grove: [20, 24], outpost: [20, 24], rocky: [28, 34], wild: [30, 36] }[biome];
+    const rockP = { grove: 0.4, outpost: 0.45, rocky: 0.7, wild: 0.2 }[biome];
+    // a thin far row of small trees right on the horizon
+    for (let i = 0, n = Math.round(rnd.range(...nFar)); i < n; i++) add(rnd.pick(DRY_TREES), rnd.range(618, 630), rnd.range(0.36, 0.46));
+    // watchtowers on the horizon at an outpost, one lone big tree in the wild
+    if (biome === 'outpost') for (let i = 0, n = rnd.chance(0.5) ? 2 : 1; i < n; i++) add('tower', rnd.range(640, 662), rnd.range(0.3, 0.38));
+    if (biome === 'wild' || (biome === 'rocky' && rnd.chance(0.5))) add('tree', rnd.range(676, 700), rnd.range(0.42, 0.5));
+    // dead trees along the horizon, bigger the nearer they stand
+    for (let i = 0, n = Math.round(rnd.range(...nTrees)); i < n; i++) {
+      const y = rnd.range(632, 690);
+      add(rnd.pick(DRY_TREES), y, 0.58 + ((y - 632) / 58) * 0.42 + rnd.range(-0.06, 0.06));
+    }
+    // grass and rocks scattered over the land, smaller with distance
+    for (let i = 0, n = Math.round(rnd.range(...nGround)); i < n; i++) {
+      const y = rnd.range(640, 1060);
+      const near = (y - 640) / 420;
+      const rock = rnd.chance(rockP);
+      const key = rock ? rnd.pick(near > 0.7 ? ['rock4', 'rock5', 'rock6'] : ROCK_S) : rnd.pick(near > 0.6 ? ['grass2', 'grass3', 'grass4', 'grass5', 'grass6'] : GRASS_S);
+      add(key, y, 0.3 + 0.3 * near + rnd.range(-0.04, 0.04));
+    }
+    return out;
   }
 
   /* ----------------------------------------------------------------------- */
@@ -234,7 +474,7 @@ window.ZD = window.ZD || {};
     crack(px, py) {
       this.cracks.innerHTML = '';
       const R = this.r;
-      const n = settings.reducedMotion ? 7 : 11;
+      const n = 11;
       const lines = [];
       for (let i = 0; i < n; i++) {
         const ang = (i / n) * Math.PI * 2 + rand(-0.25, 0.25);
@@ -405,7 +645,6 @@ window.ZD = window.ZD || {};
   /* ----------------------------------------------------------------------- */
   const fx = {
     shards(container, x, y, n = 14, colors = ['#bfe9ff', '#8fd3ff', '#ffffff', '#ff8aa0']) {
-      if (settings.reducedMotion) n = Math.ceil(n / 2);
       for (let i = 0; i < n; i++) {
         const s = el('div', { class: 'shard', style: { left: x + 'px', top: y + 'px', background: pick(colors), width: randInt(10, 26) + 'px', height: randInt(10, 26) + 'px', clipPath: pick(['polygon(0 0,100% 20%,60% 100%)', 'polygon(10% 0,100% 0,70% 100%,0 60%)', 'polygon(50% 0,100% 100%,0 100%)']) } });
         container.appendChild(s);
@@ -424,7 +663,6 @@ window.ZD = window.ZD || {};
       }
     },
     sparkles(container, x, y, n = 16, color = '#fff2a8') {
-      if (settings.reducedMotion) n = Math.ceil(n / 2);
       for (let i = 0; i < n; i++) {
         const s = el('div', { class: 'spark', style: { left: x + 'px', top: y + 'px', background: color } });
         container.appendChild(s);
@@ -447,6 +685,12 @@ window.ZD = window.ZD || {};
         anime({ targets: p, translateX: Math.cos(ang) * dist, translateY: Math.sin(ang) * dist - 30, scale: [0.4, rand(1.2, 2.2)], opacity: [0.9, 0], duration: D(rand(500, 800)), easing: 'easeOutQuad', complete: () => p.remove() });
       }
     },
+    /* a little road dust behind running feet: drifts back and up, fades */
+    dust(container, x, y, dir = 1) {
+      const p = el('div', { class: 'puff dust', style: { left: x + 'px', top: y + 'px' } });
+      container.appendChild(p);
+      anime({ targets: p, translateX: -dir * rand(50, 110), translateY: -rand(10, 34), scale: [0.45, rand(1.5, 2.1)], opacity: [0.85, 0], duration: D(rand(420, 620)), easing: 'easeOutQuad', complete: () => p.remove() });
+    },
     stars(container, x, y, n = 5, dur = 1800) {
       const g = el('div', { class: 'dizzy', style: { left: x + 'px', top: y + 'px' } });
       for (let i = 0; i < n; i++) g.appendChild(el('span', { text: '★', style: { transform: `rotate(${(360 / n) * i}deg) translateX(44px)` } }));
@@ -462,7 +706,6 @@ window.ZD = window.ZD || {};
       anime({ targets: f, opacity: [maxOpacity, 0], duration: D(dur), easing: 'easeOutQuad' });
     },
     shake(intensity = 10, dur = 420) {
-      if (settings.reducedMotion) return;
       const w = document.getElementById('world');
       anime.remove(w);
       anime({
@@ -493,8 +736,9 @@ window.ZD = window.ZD || {};
       L(tiledLayer('skyline', { y: skylineTop(574), z: 3, factor: 0.05, cls: 'far', mirror: true, scale: S_FAR }));
       L(tiledLayer('haze', { y: 230, z: 4, factor: 0, opacity: 0.55, cls: 'far', mirror: true }));
       L(tiledLayer('mountains', { y: 440, z: 5, factor: 0.08, cls: 'far', mirror: true }));
-      // the side view's tree stands on the left, where the side view has its watchtower
-      L(propLayer('tree', { x: -150, y: 760, scale: 0.8, z: 6, factor: 0.12, cls: 'mid' }));
+      // the side view's tree stands on the left, where the side view has its
+      // watchtower (first wall only; later walls get their own land, setScenery)
+      this.bigTree = L(propLayer('tree', { x: -150, y: 760, scale: 0.8, z: 6, factor: 0.12, cls: 'mid faded' }));
       /* Ground, road and fences are pre-rendered by tools/build-assets.py
          (build_front_road) from ONE perspective camera, so the wall reads as
          standing IN the road:  vanishing point (960, 610), camera height 470,
@@ -507,14 +751,17 @@ window.ZD = window.ZD || {};
       };
       this.el.appendChild(baked('frontGround', 7));
 
-      /* Scenery on the land outside the fences.  Unlike the side view (watch-
-         tower + one tree) this view has a row of dry trees along the horizon
-         and small grass and rocks
-         scattered over the ground.  [key, left x, baseline y, scale];
-         drawn far-to-near so nearer things overlap farther ones. */
+      /* Scenery on the land outside the fences: a row of dry trees along the
+         horizon and small grass and rocks scattered over the ground.  The
+         first wall uses this hand-placed layout; every later wall gets land
+         generated for the biome the hero has run into (setScenery).
+         [key, left x, baseline y, scale]; drawn far-to-near so nearer things
+         overlap farther ones. */
       const propsEl = el('div', { class: 'props', style: { zIndex: 8 } });
       this.el.appendChild(propsEl);
-      const scenery = [
+      this.sceneryEl = el('div', { class: 'props' });
+      propsEl.appendChild(this.sceneryEl);
+      this.homeScenery = [
         // dry trees along the horizon (left and right of the road)
         ['dryTree9', 400, 640, 0.68], ['dryTree11', -60, 665, 0.75],
         ['dryTree2', 1270, 636, 0.66], ['dryTree6', 1480, 652, 0.8], ['dryTree12', 1700, 672, 0.95],
@@ -525,7 +772,7 @@ window.ZD = window.ZD || {};
         ['rock6', 1820, 800, 0.46], ['grass5', 120, 870, 0.5], ['rock7', 1700, 900, 0.5], ['grass2', -80, 960, 0.56],
         ['rock4', 1840, 990, 0.52], ['grass6', 1520, 1010, 0.56], ['rock8', 60, 1050, 0.6],
       ];
-      scenery.sort((a, b) => a[2] - b[2]).forEach(([k, x, y, sc]) => propsEl.appendChild(propLayer(k, { x, y, scale: sc, z: 8 }).node));
+      this.setScenery(0);
 
       /* Small rocks lying on the brick road: [key, centre x, baseline y, size].
          Scaled by depth on the road plane (k = (y - 610) / 470, 1 at the stage
@@ -637,6 +884,24 @@ window.ZD = window.ZD || {};
 
     setTarget(spec) {
       this.glass.setTarget(spec);
+    }
+
+    /* Land beside the road for the wall at `travel` px along the run (the
+       side view's distance): same biome as the side view shows there, and a
+       fresh layout per wall.  Called while this view is hidden. */
+    setScenery(travel) {
+      const at = Math.round(travel);
+      if (at === this._sceneryAt) return;
+      this._sceneryAt = at;
+      const biome = biomeAt(at);
+      const list = biome === 'home' ? this.homeScenery : frontScenery(seeded(hash32(at, 99)), biome);
+      this.sceneryEl.innerHTML = '';
+      list
+        .slice()
+        .sort((a, b) => a[2] - b[2])
+        // dry trees and towers are faded a little (see .faded in style.css)
+        .forEach(([k, x, y, sc, flip]) => this.sceneryEl.appendChild(propLayer(k, { x, y, scale: sc, flip: !!flip, cls: /^(dryTree|tower|tree)/.test(k) ? 'faded' : '' }).node));
+      this.bigTree.node.style.display = biome === 'home' ? '' : 'none';
     }
 
     idle() {
@@ -771,15 +1036,14 @@ window.ZD = window.ZD || {};
       };
       L(tiledLayer('sky', { y: -60, z: 1, factor: 0 }));
       this.clouds = cloudLayers([['cloud2', 60, 140, 0.55, false], ['cloud3', 620, 250, 0.6, false], ['cloud1', 1080, 110, 0.55, true], ['cloud4', 1560, 220, 0.55, true], ['cloud3', 2000, 90, 0.5, false], ['cloud1', -280, 280, 0.45, false]], 0.04).map(L);
-      L(sunLayer({ x: 1480, y: 330, d: 230, factor: 0.08 }));
+      // the sun is very far away: it barely moves however far the hero runs
+      L(sunLayer({ x: 1480, y: 330, d: 230, factor: 0.012 }));
       L(tiledLayer('skyline', { y: skylineTop(534), z: 3, factor: 0.1, cls: 'far', mirror: true, scale: S_FAR }));
       L(tiledLayer('haze', { y: 200, z: 4, factor: 0.12, opacity: 0.6, cls: 'far', mirror: true }));
       L(tiledLayer('mountains', { y: 420, z: 5, factor: 0.2, cls: 'far', mirror: true }));
-      // watchtower a little way off, whole and on screen: standing on the
-      // ground just behind the fence, with mid-distance grading and parallax
-      this.tower = L(propLayer('tower', { x: 40, y: 762, scale: 0.74, z: 6, factor: 0.4, cls: 'mid' }));
-      this.tree = L(propLayer('tree', { x: 1420, y: 800, scale: 0.9, z: 6, factor: 0.55, cls: 'mid' }));
-      L(tiledLayer('fenceFront', { y: 416, z: 7, factor: 0.7, cls: 'mid', mirror: true }));
+      // (the land's props - trees, watchtowers, grass, rocks - are generated
+      // bands, added below once the road is measured)
+      const fenceL = L(tiledLayer('fenceFront', { y: 416, z: 7, factor: 0.7, cls: 'mid', mirror: true }));
       /* Road (land/image copy.png): a brick walkway whose top surface is visible.
          ROAD.y is the layer top; at ROAD.scale its top surface runs from
          ROAD.back (far edge) to ROAD.front (near edge).  Characters stand on it
@@ -794,31 +1058,17 @@ window.ZD = window.ZD || {};
       ROAD.bottom = ROAD.y + Math.round(A.image('roadTop').h * ROAD.scale);
       L(tiledLayer('dirt', { y: ROAD.bottom - 14, z: 8, factor: 1, h: 1080 - ROAD.bottom + 14, scale: 0.55, mirror: true }));
       L(tiledLayer('roadTop', { y: ROAD.y, z: 8, factor: 1, scale: ROAD.scale, mirror: true }));
-      // props on the wall-top (scroll with the ground)
-      this.props = [];
-      const propsEl = el('div', { class: 'props', style: { zIndex: 9 } });
-      this.el.appendChild(propsEl);
-      [[-200, 'grass3'], [120, 'rock5'], [640, 'grass6'], [1180, 'grass4'], [1700, 'rock6'], [2050, 'grass2'], [-20, 'rock8'], [1350, 'grass7'], [420, 'rock7'], [880, 'grass5'], [1540, 'rock8'], [1880, 'grass7'], [2180, 'rock7']].forEach(([x, k]) => {
-        const p = propLayer(k, { x, y: ROAD.back + 14, scale: k.startsWith('rock') ? 0.42 : 0.5, z: 9, factor: 1 });
-        p.home = x;
-        propsEl.appendChild(p.node);
-        this.props.push(p);
-      });
-      // the dirt verge: grass tufts along the road's foot, rocks and big
-      // tufts nearer the camera.  [x, key, baseline y, scale, parallax]
-      const vb = ROAD.bottom;
-      [
-        [-120, 'grass5', vb + 14, 0.62, 1], [260, 'grass7', vb + 12, 0.58, 1], [520, 'rock8', vb + 26, 0.5, 1], [760, 'grass3', vb + 16, 0.6, 1],
-        [1040, 'grass6', vb + 12, 0.56, 1], [1290, 'rock7', vb + 28, 0.48, 1], [1460, 'grass4', vb + 14, 0.6, 1], [1760, 'grass5', vb + 12, 0.58, 1],
-        [2010, 'rock6', vb + 26, 0.5, 1], [2230, 'grass7', vb + 14, 0.6, 1],
-        [-300, 'rock1', 1095, 0.7, 1.08], [700, 'rock2', 1100, 0.65, 1.08], [1500, 'rock3', 1095, 0.7, 1.08], [2200, 'rock4', 1100, 0.65, 1.08],
-        [300, 'grass1', 1092, 0.75, 1.08], [1100, 'grass2', 1095, 0.6, 1.08], [1900, 'grass2', 1092, 0.75, 1.08], [60, 'rock5', 1070, 0.45, 1.04], [1680, 'rock6', 1072, 0.45, 1.04],
-      ].forEach(([x, k, y, scale, factor]) => {
-        const p = propLayer(k, { x, y, scale, z: 9, factor });
-        p.home = x;
-        propsEl.appendChild(p.node);
-        this.props.push(p);
-      });
+      /* The land's props, generated endlessly from the distance run (see
+         Scatter): distant trees and watchtowers seen through the fence, big
+         ones just behind it, grass and pebbles on the road's back edge and
+         the verge, big rocks and tufts nearest the camera. */
+      this.scatter = sideScatter(ROAD);
+      const sc = this.scatter;
+      this.el.insertBefore(sc.far.node, fenceL.node);
+      this.el.insertBefore(sc.mid.node, fenceL.node);
+      [sc.road, sc.verge, sc.fore].forEach((s) => this.el.appendChild(s.node));
+      // distance already run past earlier walls; scroll px is added on top
+      this.travel = 0;
 
       // walls: two slots so the next checkpoint can slide in while this one leaves
       this.wallHome = 985; // x of the wall's left edge at rest
@@ -877,9 +1127,7 @@ window.ZD = window.ZD || {};
       // heroLeapCore is for hero.sideLeap, whose mid-air frames sit higher
       this.heroCore = Math.round(150 * this.heroScale);
       this.heroLeapCore = Math.round(205 * this.heroScale);
-      this.zombieCore = Math.round(75 * this.zombieScale);
-      // zombie.side.leap mid-air frames (incl. its 0.9 scaleAdjust), tilted 30deg
-      this.zombieLeapCore = Math.round(185 * this.zombieScale);
+      // zombie cores are read per skin from the sheets (see zombieCore)
 
       // characters
       this.heroHome = { x: 330, y: this.groundY };
@@ -943,17 +1191,20 @@ window.ZD = window.ZD || {};
       this.wall.glass.setTarget(spec);
     }
 
+    /* px = camera offset from the current checkpoint (walls, zombie and gate
+       are placed relative to it).  The scenery uses the total distance run
+       (travel + px), so it never jumps back when a new checkpoint becomes
+       current - the land keeps rolling on from wall to wall. */
     setScroll(px) {
       this.scrollX = px;
-      // props keep their `left`; only transform moves (and wraps) them
+      const world = this.travel + px;
+      this.sceneX = world;
       this.layers.forEach((l) => {
-        if (l.tiled) scrollTiled(l, px);
-        else if (l.cloud) placeCloud(l, px);
-        else if (l.factor) l.node.style.transform = `translateX(${wrapX(l.x - px * l.factor, l.w) - l.x}px)`;
+        if (l.tiled) scrollTiled(l, world);
+        else if (l.cloud) placeCloud(l, world);
+        else if (l.factor) l.node.style.transform = `translateX(${wrapX(l.x - world * l.factor, l.w) - l.x}px)`;
       });
-      this.props.forEach((p) => {
-        p.node.style.transform = `translateX(${wrapX(p.home - px * p.factor, p.w) - p.home}px)`;
-      });
+      Object.values(this.scatter).forEach((s) => s.update(world));
       this.walls.forEach((w) => {
         w.root.style.transform = `translateX(${w.offset - px}px)`;
       });
@@ -1028,7 +1279,10 @@ window.ZD = window.ZD || {};
       }
       this.zombie.el.style.opacity = '';
       this.hero.play({ sheet: 'hero.sideRun', fps: 16, loop: true });
-      const stepTimer = setInterval(() => ZD.audio.play('step'), 230);
+      const stepTimer = setInterval(() => {
+        ZD.audio.play('step');
+        fx.dust(this.fxLayer, this.hero.x - 18, this.heroHome.y - 8);
+      }, 230);
       // the hero may be on the far side of the wall (after jumping through):
       // the camera catches up and the hero settles back at the home spot
       const hx0 = this.hero.x;
@@ -1039,12 +1293,15 @@ window.ZD = window.ZD || {};
         if (hx0 !== hx1) this.hero.setPos(hx0 + (hx1 - hx0) * (o.v / distance), this.heroHome.y);
       } }).finished;
       clearInterval(stepTimer);
-      // finalize: the new wall becomes current at the home position
+      // finalize: the new wall becomes current at the home position.  The
+      // distance run moves into `travel`, so the scenery stays exactly where
+      // it is (no snap back to the previous wall's view).
       this.walls[this.cur].root.style.display = 'none';
       this.cur = 1 - this.cur;
       this.wall.offset = 0;
       this.zombieOffset = 0;
       if (this.gate) this.gateOffset = 0;
+      this.travel += distance;
       this.setScroll(0);
       this.hero.play({ sheet: 'hero.sideIdle', fps: 9, loop: true });
     }
@@ -1110,11 +1367,29 @@ window.ZD = window.ZD || {};
       this.hero.el.style.opacity = '';
     }
 
-    /* Horde used by the intro. */
+    /* Feet -> torso distance (scaled px) of the current zombie skin, measured
+       by the asset build: `core` of the sheet, in sheet px.  zombieCore is
+       the running body (the throw-back arc), zombieLeapCore the mid-air
+       frames of zombie.side.leap - the torso is what flies through the
+       circle's centre. */
+    _zombieCore(name) {
+      const s = A.sprite(this.zombie.resolve(name));
+      return Math.round((s.core || 0) * (s.scaleAdjust || 1) * this.zombieScale);
+    }
+
+    get zombieCore() {
+      return this._zombieCore('zombie.side.run');
+    }
+
+    get zombieLeapCore() {
+      return this._zombieCore('zombie.side.leap');
+    }
+
+    /* Horde used by the intro: both zombie skins, alternating. */
     spawnHorde(n = 3) {
       this.clearHorde();
       for (let i = 0; i < n; i++) {
-        const z = new ZD.Sprite({ className: 'char-zombie extra', zIndex: 17 - i });
+        const z = new ZD.Sprite({ className: 'char-zombie extra', zIndex: 17 - i, skin: ZD.scene.zombieSkins[(i + 1) % 2] });
         z.setSheet('zombie.side.run');
         const sc = (1.45 - i * 0.2) * (this.zombieScale / 1.6);
         z.setScale(sc);
@@ -1152,7 +1427,13 @@ window.ZD = window.ZD || {};
       document.getElementById('stage').dataset.view = name;
     }
 
+    /* the front view shows the land at the wall the hero has reached */
+    _syncFront(name) {
+      if (name === 'front') this.front.setScenery(this.side.travel);
+    }
+
     cut(name) {
+      this._syncFront(name);
       this._tag(name);
       ['front', 'side'].forEach((n) => {
         const s = this._scene(n).el;
@@ -1166,27 +1447,21 @@ window.ZD = window.ZD || {};
     /* Cinematic shift between views with a perspective swing + zoom. */
     async to(name, { duration = 820, zoomAt } = {}) {
       if (this.current === name) return;
+      this._syncFront(name);
       this._tag(name);
       const from = this._scene(this.current).el;
       const to = this._scene(name).el;
       const dir = name === 'side' ? 1 : -1;
       to.classList.add('active');
       to.style.opacity = 0;
-      if (settings.reducedMotion) {
-        await Promise.all([
-          anime({ targets: from, opacity: 0, duration: 300, easing: 'linear' }).finished,
-          anime({ targets: to, opacity: 1, duration: 300, easing: 'linear' }).finished,
-        ]);
-      } else {
-        const origin = zoomAt ? `${zoomAt.x}px ${zoomAt.y}px` : '50% 50%';
-        from.style.transformOrigin = origin;
-        to.style.transformOrigin = '50% 50%';
-        ZD.audio.play('swoosh');
-        await Promise.all([
-          anime({ targets: from, opacity: [1, 0], scale: [1, 1.18], rotateY: [0, -18 * dir], duration, easing: 'easeInQuad' }).finished,
-          anime({ targets: to, opacity: [0, 1], scale: [0.92, 1], rotateY: [16 * dir, 0], duration, delay: duration * 0.35, easing: 'easeOutCubic' }).finished,
-        ]);
-      }
+      const origin = zoomAt ? `${zoomAt.x}px ${zoomAt.y}px` : '50% 50%';
+      from.style.transformOrigin = origin;
+      to.style.transformOrigin = '50% 50%';
+      ZD.audio.play('swoosh');
+      await Promise.all([
+        anime({ targets: from, opacity: [1, 0], scale: [1, 1.18], rotateY: [0, -18 * dir], duration, easing: 'easeInQuad' }).finished,
+        anime({ targets: to, opacity: [0, 1], scale: [0.92, 1], rotateY: [16 * dir, 0], duration, delay: duration * 0.35, easing: 'easeOutCubic' }).finished,
+      ]);
       from.classList.remove('active');
       from.style.transform = '';
       to.style.transform = '';
@@ -1203,6 +1478,15 @@ window.ZD = window.ZD || {};
     Projectile,
     STAGE_W,
     STAGE_H,
+    /* Zombie variants (sprite skins): the road worker ("zombie.*" sheets)
+       and the hard-hat worker ("zombie2.*").  null = the default sheets. */
+    zombieSkins: [null, 'zombie2'],
+    /* Dress the wall's zombie (front + side views) as variant `i`. */
+    setZombieSkin(i) {
+      const skin = this.zombieSkins[((i % this.zombieSkins.length) + this.zombieSkins.length) % this.zombieSkins.length];
+      this.front.zombie.setSkin(skin);
+      this.side.zombie.setSkin(skin);
+    },
     init(worldEl) {
       this.front = new FrontScene();
       this.side = new SideScene();
@@ -1212,29 +1496,22 @@ window.ZD = window.ZD || {};
       /* Clouds drift slowly right to left, each at its own speed (kept on the
          parallax path so it composes with scrolling).  Time-based rAF loop;
          a cloud's drift is kept modulo its wrap span (WORLD_W + width), so
-         it wraps seamlessly forever.  Paused with reduced motion. */
+         it wraps seamlessly forever. */
       const CLOUD_PX_PER_S = 16;
       let last = performance.now();
       const tick = (now) => {
         const dt = Math.min(0.1, (now - last) / 1000);
         last = now;
-        if (!settings.reducedMotion) {
-          const step = (l, scroll) => {
-            l.drift = (l.drift + dt * CLOUD_PX_PER_S * l.speed) % (WORLD_W + l.w);
-            placeCloud(l, scroll);
-          };
-          this.front.clouds.forEach((l) => step(l, 0));
-          this.side.clouds.forEach((l) => step(l, this.side.scrollX));
-        }
+        const step = (l, scroll) => {
+          l.drift = (l.drift + dt * CLOUD_PX_PER_S * l.speed) % (WORLD_W + l.w);
+          placeCloud(l, scroll);
+        };
+        this.front.clouds.forEach((l) => step(l, 0));
+        this.side.clouds.forEach((l) => step(l, this.side.sceneX));
         requestAnimationFrame(tick);
       };
       requestAnimationFrame(tick);
       return this;
-    },
-    setReducedMotion(v) {
-      settings.reducedMotion = v;
-      ZD.prefs.set('reducedMotion', v);
-      document.body.classList.toggle('reduced-motion', v);
     },
   };
 })();
