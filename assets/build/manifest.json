@@ -6,12 +6,85 @@
    "w": 1870,
    "h": 841
   },
-  "clouds": {
-   "src": "bg/clouds.webp",
-   "w": 1870,
-   "h": 420,
-   "ox": 0,
-   "oy": 0
+  "cloud1": {
+   "src": "props/cloud-1.webp",
+   "w": 430,
+   "h": 89
+  },
+  "cloud2": {
+   "src": "props/cloud-2.webp",
+   "w": 517,
+   "h": 122
+  },
+  "cloud3": {
+   "src": "props/cloud-3.webp",
+   "w": 334,
+   "h": 72
+  },
+  "cloud4": {
+   "src": "props/cloud-4.webp",
+   "w": 392,
+   "h": 69
+  },
+  "dryTree1": {
+   "src": "props/dry-tree-1.webp",
+   "w": 320,
+   "h": 325
+  },
+  "dryTree2": {
+   "src": "props/dry-tree-2.webp",
+   "w": 337,
+   "h": 319
+  },
+  "dryTree3": {
+   "src": "props/dry-tree-3.webp",
+   "w": 320,
+   "h": 310
+  },
+  "dryTree4": {
+   "src": "props/dry-tree-4.webp",
+   "w": 324,
+   "h": 305
+  },
+  "dryTree5": {
+   "src": "props/dry-tree-5.webp",
+   "w": 269,
+   "h": 307
+  },
+  "dryTree6": {
+   "src": "props/dry-tree-6.webp",
+   "w": 390,
+   "h": 299
+  },
+  "dryTree7": {
+   "src": "props/dry-tree-7.webp",
+   "w": 267,
+   "h": 313
+  },
+  "dryTree8": {
+   "src": "props/dry-tree-8.webp",
+   "w": 285,
+   "h": 315
+  },
+  "dryTree9": {
+   "src": "props/dry-tree-9.webp",
+   "w": 315,
+   "h": 320
+  },
+  "dryTree10": {
+   "src": "props/dry-tree-10.webp",
+   "w": 418,
+   "h": 261
+  },
+  "dryTree11": {
+   "src": "props/dry-tree-11.webp",
+   "w": 254,
+   "h": 320
+  },
+  "dryTree12": {
+   "src": "props/dry-tree-12.webp",
+   "w": 394,
+   "h": 328
   },
   "haze": {
    "src": "bg/haze.webp",
@@ -30,16 +103,16 @@
   "skyline": {
    "src": "bg/skyline.webp",
    "w": 1870,
-   "h": 310,
+   "h": 561,
    "ox": 0,
-   "oy": 330
+   "oy": 280
   },
   "tower": {
    "src": "bg/tower.webp",
-   "w": 771,
-   "h": 763,
-   "ox": 101,
-   "oy": 32
+   "w": 381,
+   "h": 803,
+   "ox": 157,
+   "oy": 19
   },
   "tree": {
    "src": "bg/tree.webp",
@@ -50,17 +123,22 @@
   },
   "fenceFront": {
    "src": "bg/fence-front.webp",
-   "w": 2500,
+   "w": 2339,
    "h": 375,
-   "ox": 0,
+   "ox": 81,
    "oy": 505
   },
-  "landRoad": {
-   "src": "bg/land-road.webp",
-   "w": 2500,
-   "h": 370,
-   "ox": 0,
-   "oy": 530
+  "safeZone": {
+   "src": "bg/safe-zone.webp",
+   "w": 1633,
+   "h": 850,
+   "ox": 59,
+   "oy": 26
+  },
+  "roadTop": {
+   "src": "bg/road-top.webp",
+   "w": 2171,
+   "h": 211
   },
   "grass1": {
    "src": "props/grass-1.webp",
@@ -137,16 +215,6 @@
    "w": 61,
    "h": 41
   },
-  "roadPersp": {
-   "src": "bg/road-persp.webp",
-   "w": 1670,
-   "h": 941
-  },
-  "gameOver": {
-   "src": "bg/game-over.webp",
-   "w": 1572,
-   "h": 774
-  },
   "dirt": {
    "src": "bg/dirt.webp",
    "w": 1854,
@@ -163,6 +231,43 @@
    "w": 2560,
    "h": 660,
    "y": 420
+  },
+  "roadPersp": {
+   "src": "bg/road-persp.webp",
+   "w": 1670,
+   "h": 941
+  },
+  "gameOver": {
+   "src": "bg/game-over.webp",
+   "w": 1572,
+   "h": 774
+  },
+  "banner": {
+   "src": "ui/banner.webp",
+   "w": 1035,
+   "h": 149,
+   "capL": 245,
+   "capR": 130,
+   "socket": {
+    "x": 165.8,
+    "y": 73.1,
+    "r": 60.5
+   }
+  },
+  "profile": {
+   "src": "ui/profile.webp",
+   "w": 256,
+   "h": 256
+  },
+  "welcomeLogo": {
+   "src": "ui/welcome-logo.webp",
+   "w": 1300,
+   "h": 675
+  },
+  "startButton": {
+   "src": "ui/start-button.webp",
+   "w": 480,
+   "h": 512
   }
  },
  "sprites": {
@@ -250,6 +355,15 @@
   "hero.backJump": {
    "src": "hero/backJump.webp",
    "fw": 362,
+   "fh": 362,
+   "cols": 4,
+   "rows": 3,
+   "frames": 12,
+   "anchorY": 0.95
+  },
+  "hero.sideLeap": {
+   "src": "hero/sideLeap.webp",
+   "fw": 420,
    "fh": 362,
    "cols": 4,
    "rows": 3,
@@ -401,51 +515,100 @@
    "anchorY": 0.83,
    "facing": "left",
    "scaleAdjust": 0.6
+  },
+  "zombie.side.leap": {
+   "src": "zombie/side-leap.webp",
+   "fw": 320,
+   "fh": 384,
+   "cols": 4,
+   "rows": 4,
+   "frames": 16,
+   "loop": false,
+   "anchorY": 0.9076,
+   "facing": "left",
+   "scaleAdjust": 0.9
   }
  },
  "walls": {
   "front": {
    "src": "wall/front.webp",
-   "w": 471,
+   "w": 474,
    "h": 503,
    "hole": {
-    "cx": 239.3,
-    "cy": 212.1,
-    "rx": 113.5,
-    "ry": 117.0
+    "cx": 234.0,
+    "cy": 219.7,
+    "rx": 136.0,
+    "ry": 133.5
    }
   },
   "angle1": {
    "src": "wall/angle1.webp",
-   "w": 325,
-   "h": 601,
+   "w": 330,
+   "h": 599,
    "hole": {
-    "cx": 120.9,
-    "cy": 279.7,
-    "rx": 53.5,
-    "ry": 113.0
+    "cx": 142.7,
+    "cy": 285.7,
+    "rx": 57.5,
+    "ry": 117.5
+   },
+   "base": {
+    "far": {
+     "x": 2,
+     "y": 506
+    },
+    "near": {
+     "x": 268,
+     "y": 597
+    }
+   },
+   "rim": {
+    "cx": 122.8,
+    "cy": 285.1,
+    "rx": 76.7,
+    "ry": 130.9,
+    "rot": 3.0
    }
   },
   "angle2": {
    "src": "wall/angle2.webp",
-   "w": 269,
-   "h": 672,
+   "w": 272,
+   "h": 663,
    "hole": {
-    "cx": 86.0,
-    "cy": 321.4,
-    "rx": 34.5,
-    "ry": 116.0
+    "cx": 101.8,
+    "cy": 321.9,
+    "rx": 37.5,
+    "ry": 122.0
+   },
+   "base": {
+    "far": {
+     "x": 1,
+     "y": 577
+    },
+    "near": {
+     "x": 202,
+     "y": 661
+    }
    }
   },
   "angle3": {
    "src": "wall/angle3.webp",
-   "w": 194,
-   "h": 679,
+   "w": 200,
+   "h": 676,
    "hole": {
-    "cx": 50.2,
-    "cy": 323.7,
-    "rx": 15.0,
-    "ry": 104.5
+    "cx": 64.4,
+    "cy": 334.0,
+    "rx": 13.5,
+    "ry": 78.0
+   },
+   "base": {
+    "far": {
+     "x": 3,
+     "y": 586
+    },
+    "near": {
+     "x": 130,
+     "y": 674
+    }
    }
   }
  }

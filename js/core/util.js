@@ -58,6 +58,7 @@ window.ZD = window.ZD || {};
       return a;
     },
     rad: (deg) => (deg * Math.PI) / 180,
+    easeOutCubic: (t) => 1 - Math.pow(1 - t, 3),
     nextFrame: () => new Promise((r) => requestAnimationFrame(() => r())),
     wait: (ms) => ZD.clock.wait(ms),
     fmtPct: (v) => `${Math.round(v * 100)}%`,
@@ -104,7 +105,12 @@ window.ZD = window.ZD || {};
           t.remaining = Math.max(0, t.remaining - (now - t.start));
         }
       });
-      if (window.anime) anime.running.forEach((a) => a.pause());
+      // anime.js drops paused instances from anime.running on the next frame,
+      // so remember them here or resume() would never restart them
+      if (window.anime) {
+        clock.frozen = anime.running.slice();
+        clock.frozen.forEach((a) => a.pause());
+      }
       ZD.sprites && ZD.sprites.setPaused(true);
     },
     resume() {
@@ -113,7 +119,9 @@ window.ZD = window.ZD || {};
       timers.forEach((t) => {
         if (!t.id && !t.done) t.arm();
       });
-      if (window.anime) anime.running.forEach((a) => a.play());
+      // (skip tweens that were deliberately stopped while paused: a._killed)
+      if (window.anime) (clock.frozen || []).forEach((a) => !a.completed && !a._killed && a.play());
+      clock.frozen = [];
       ZD.sprites && ZD.sprites.setPaused(false);
     },
     clearAll() {

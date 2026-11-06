@@ -22,7 +22,7 @@ window.ZD = window.ZD || {};
   }
 
   /* Curved band along the circumference (an arc is a curve - we give it a
-     small thickness so it can be a projectile / opening). */
+     clear thickness so it can be a projectile and a visible opening). */
   function arcPath(cx, cy, r, start, sweep, thick) {
     const r2 = r - thick;
     const a0 = polar(cx, cy, r, start);
@@ -73,6 +73,8 @@ window.ZD = window.ZD || {};
     return s;
   }
 
+  const pieceId = (p) => (typeof p === 'string' ? p : normalize(p).id);
+
   const geo = {
     polar,
     rad,
@@ -82,7 +84,7 @@ window.ZD = window.ZD || {};
       return normalize({ type: s.type, start: s.start + s.sweep, sweep: 360 - s.sweep });
     },
     /* SVG path for a piece.  rotOffset rotates the piece about the centre. */
-    piecePath(spec, cx, cy, r, rotOffset = 0, thickRatio = 0.17) {
+    piecePath(spec, cx, cy, r, rotOffset = 0, thickRatio = 0.26) {
       const s = normalize(spec);
       const start = s.start + rotOffset;
       switch (s.type) {
@@ -116,22 +118,24 @@ window.ZD = window.ZD || {};
       const s = normalize(spec);
       return [polar(cx, cy, r, s.start + rotOffset), polar(cx, cy, r, s.start + rotOffset + s.sweep)];
     },
-    /* Which label does a piece get at a given level: 'basic' (ARC / SECTOR /
-       SEGMENT) or 'full' (MINOR SECTOR ...). */
-    labelKey(spec, level = 'full') {
-      const s = normalize(spec);
-      if (s.type === 'chord') return 'pieceChord';
-      if (level === 'basic') return I18n.key('piece', s.type);
-      return I18n.key('piece', s.size, s.type);
+    /* The six answers, in grid order (rows = size, columns = type). */
+    PIECES: ['minor-arc', 'minor-sector', 'minor-segment', 'major-arc', 'major-sector', 'major-segment'],
+    idOf: (spec) => normalize(spec).id,
+    /* i18n keys for a piece (spec or id like 'major-sector'):
+         piece*  name      MINOR SECTOR
+         rule*   one-line rule, repeated on the walk to the next wall
+         reason* why the opening is that piece (shown after a mistake) */
+    labelKey: (p) => I18n.key('piece', pieceId(p)),
+    ruleKey: (p) => I18n.key('rule', pieceId(p)),
+    reasonKey: (p) => I18n.key('reason', pieceId(p)),
+    /* A canonical spec for a piece id (button icons, lessons). */
+    specOf(id, dir = -90) {
+      const [size, type] = id.split('-');
+      const sweep = size === 'minor' ? 100 : 260;
+      return normalize({ type, sweep, start: dir - sweep / 2 });
     },
     /* Correctness is decided from data, never from pixels. */
-    matches(option, target, level = 'full') {
-      const a = normalize(option);
-      const b = normalize(target);
-      if (a.type !== b.type) return false;
-      if (level === 'basic') return true;
-      return a.size === b.size;
-    },
+    matches: (a, b) => pieceId(a) === pieceId(b),
     /* Mid-angle of a piece, handy for placing labels. */
     midAngle(spec, rotOffset = 0) {
       const s = normalize(spec);

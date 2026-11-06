@@ -1,16 +1,18 @@
 /* Boot: load locales, fit the 1920x1080 stage to the viewport, preload, start. */
+/* Fit the stage right away (before locales load) so the loading screen -
+   which is the welcome screen - shows at its final size from the first frame. */
+function fitStage() {
+  const stage = document.getElementById('stage');
+  const s = Math.min(window.innerWidth / 1920, window.innerHeight / 1080);
+  stage.style.transform = `translate(-50%, -50%) scale(${s})`;
+  document.documentElement.style.setProperty('--s', s);
+}
+window.addEventListener('resize', fitStage);
+window.addEventListener('orientationchange', () => setTimeout(fitStage, 200));
+fitStage();
+
 async function boot() {
   const stage = document.getElementById('stage');
-
-  function fit() {
-    const s = Math.min(window.innerWidth / 1920, window.innerHeight / 1080);
-    stage.style.transform = `translate(-50%, -50%) scale(${s})`;
-    document.documentElement.style.setProperty('--s', s);
-  }
-  window.addEventListener('resize', fit);
-  window.addEventListener('orientationchange', () => setTimeout(fit, 200));
-  fit();
-
   const bar = document.querySelector('#loader .bar > div');
   try {
     await ZD.assets.preload((p) => {
@@ -24,8 +26,8 @@ async function boot() {
   ZD.ui.init(stage);
   document.body.classList.toggle('reduced-motion', ZD.scene.settings.reducedMotion);
 
-  const loader = document.getElementById('loader');
-  anime({ targets: loader, opacity: 0, duration: 400, easing: 'linear', complete: () => loader.remove() });
+  // the loader is the welcome screen: ZD.intro.title() swaps it for the real
+  // one (identical layout) and brings in the play button
 
   window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' || e.key === 'p') ZD.game.togglePause();

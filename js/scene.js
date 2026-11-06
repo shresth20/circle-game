@@ -16,10 +16,43 @@ window.ZD = window.ZD || {};
 
   const STAGE_W = 1920;
   const STAGE_H = 1080;
+  // finale building; door / plaque boxes are in the built image's pixels
+  const SAFE_ZONE = {
+    scale: 0.78,
+    left: 600, // stage x of the building's left edge at rest
+    sink: 34, // base blocks stand on the road's top surface
+    door: { x: 1243, y: 390, w: 150, h: 422 },
+    plaque: { x: 621, y: 499, w: 370, h: 85 },
+  };
   const WORLD_W = 2560; // scenery is wider than the stage so 20:9 screens stay filled
   const WORLD_X = (STAGE_W - WORLD_W) / 2; // -320
   const S_WIDE = WORLD_W / 1870; // scale for the 1870px-wide layers
   const S_FENCE = WORLD_W / 2500; // scale for the 2500px-wide layers
+  // far skyline is drawn smaller than the other wide layers and keeps its
+  // bottom edge where it was
+  const S_FAR = S_WIDE * 0.7;
+  // skyline art runs solid to its bottom edge: pin source row 640 (the old
+  // crop bottom) at screenY so the rooftops stay put and the base extends down
+  const skylineTop = (screenY) => Math.round(screenY - (640 - (A.image('skyline').oy || 0)) * S_FAR);
+
+  /* A few separate small clouds (cut out by the build) instead of a tiled
+     cloud bank.  [key, x, baseline y, scale, flip] */
+  function cloudLayers(defs, factor) {
+    // each cloud drifts at its own speed: bigger (nearer) clouds a little
+    // faster, with a small per-cloud variation so they slide past each other
+    return defs.map(([key, x, y, scale, flip], i) => Object.assign(propLayer(key, { x, y, scale, z: 2, factor, cls: 'far cloud', flip }), { cloud: true, drift: 0, flip: !!flip, speed: 0.55 + scale * 0.8 + ((i * 37) % 5) * 0.06 }));
+  }
+
+  /* One sun, drawn here: the skyline art's own sun repeated with every tile. */
+  function sunLayer({ x, y, d, factor }) {
+    const node = el('div', { class: 'layer sun far', style: { left: x - d / 2 + 'px', top: y - d / 2 + 'px', width: d + 'px', height: d + 'px', zIndex: 3 } });
+    return { node, factor, tiled: false, x: x - d / 2, w: d };
+  }
+
+  /* clouds drift slowly and wrap around the world */
+  function placeCloud(l, px) {
+    l.node.style.transform = `translateX(${wrapX(l.x - px * l.factor - l.drift, l.w) - l.x}px)${l.flip ? ' scaleX(-1)' : ''}`;
+  }
 
   const settings = { reducedMotion: ZD.prefs.get('reducedMotion', window.matchMedia('(prefers-reduced-motion: reduce)').matches) };
   const D = (ms) => (settings.reducedMotion ? Math.round(ms * 0.55) : ms);
@@ -51,10 +84,13 @@ window.ZD = window.ZD || {};
           class: 'tile',
           style: {
             left: i * tileW + 'px',
-            width: tileW + 'px',
+            width: tileW + 1 + 'px', // 1px overlap hides sub-pixel seams
             height: height + 'px',
             backgroundImage: `url("${A.imageUrl(key)}")`,
             backgroundSize: `${tileW}px ${tileH}px`,
+            // flipped tiles anchor right so the flip puts the art flush left
+            backgroundPosition: mirror && i % 2 ? 'right top' : 'left top',
+            backgroundRepeat: 'repeat-x', // fill the 1px overlap column
             transform: mirror && i % 2 ? 'scaleX(-1)' : '',
           },
         })
@@ -100,7 +136,7 @@ window.ZD = window.ZD || {};
   /* ----------------------------------------------------------------------- */
   class GlassMech {
     /**
-     * @param {object} o { cx, cy, r, squash (scaleX for side view) }
+     * @param {object} o { cx, cy, r, squash (scaleX for side view), rot (deg, clockwise) }
      */
     constructor(o) {
       this.id = 'glass' + ++uid;
@@ -108,6 +144,7 @@ window.ZD = window.ZD || {};
       this.cy = o.cy;
       this.r = o.r;
       this.squash = o.squash || 1;
+      this.rot = o.rot || 0;
       const R = this.r;
       const pad = 6;
       this.svg = svg('svg', {
@@ -115,7 +152,7 @@ window.ZD = window.ZD || {};
         viewBox: `${-R - pad} ${-R - pad} ${2 * (R + pad)} ${2 * (R + pad)}`,
         width: 2 * (R + pad),
         height: 2 * (R + pad),
-        style: { left: this.cx - R - pad + 'px', top: this.cy - R - pad + 'px', transform: `scaleX(${this.squash})` },
+        style: { left: this.cx - R - pad + 'px', top: this.cy - R - pad + 'px', transform: `rotate(${this.rot}deg) scaleX(${this.squash})` },
       });
       const defs = svg('defs');
       const grad = svg('radialGradient', { id: this.id + '-g', cx: '35%', cy: '30%', r: '80%' });
@@ -138,13 +175,21 @@ window.ZD = window.ZD || {};
       this.tint = svg('circle', { r: R + 2, fill: '#ff2d55', opacity: '0', class: 'glass-tint' });
       this.gGlass.append(this.disc, this.shine, this.shine2, this.tint);
 
-      this.openShadow = svg('path', { d: '', fill: '#120a2a', opacity: '0.45' });
-      this.outline = svg('path', { d: '', class: 'glass-outline', fill: 'none', stroke: '#ffd166', 'stroke-width': 4, 'stroke-dasharray': '10 8', 'stroke-linejoin': 'round', filter: `url(#${this.id}-glow)` });
+      // the opening: a light dark tint (the zombie behind must stay visible -
+      // it is the timer) + a dark edge under a solid bright outline, so even
+      // a thin arc reads clearly against the glass
+      this.openShadow = svg('path', { d: '', fill: '#120a2a', opacity: '0.3' });
+      this.edge = svg('path', { d: '', class: 'glass-edge', fill: 'none', stroke: '#1a0a2e', 'stroke-width': 11, 'stroke-linejoin': 'round', opacity: '0.85' });
+      this.outline = svg('path', { d: '', class: 'glass-outline', fill: 'none', stroke: '#ffd166', 'stroke-width': 5, 'stroke-linejoin': 'round', filter: `url(#${this.id}-glow)` });
       this.center = svg('circle', { r: 4.5, fill: '#ffe08a', stroke: '#5b2a86', 'stroke-width': 2, class: 'glass-center' });
       this.cracks = svg('g', { class: 'cracks', filter: `url(#${this.id}-glow)` });
       this.rim = svg('circle', { r: R - 1, fill: 'none', stroke: '#ffffff', 'stroke-opacity': '0.25', 'stroke-width': 2 });
       this.lock = svg('circle', { r: R + 3, fill: 'none', stroke: '#7CFF8A', 'stroke-width': 5, opacity: '0', class: 'glass-lock' });
-      this.svg.append(defs, this.openShadow, this.gGlass, this.outline, this.center, this.cracks, this.rim, this.lock);
+      // zombie timer: the rim pulses red in the last seconds
+      this.danger = svg('circle', { r: R + 1, fill: 'none', stroke: '#ff3b5c', 'stroke-width': 8, class: 'glass-danger' });
+      // (the shadow only covers the cut-out area, so it can sit above the glass)
+      this.gOpen = svg('g', { class: 'glass-open' }, [this.openShadow, this.edge, this.outline]);
+      this.svg.append(defs, this.gGlass, this.gOpen, this.center, this.cracks, this.rim, this.danger, this.lock);
       this.el = this.svg;
       this.spec = null;
     }
@@ -154,10 +199,27 @@ window.ZD = window.ZD || {};
       const d = spec ? ZD.geo.piecePath(spec, 0, 0, this.r) : '';
       this.cut.setAttribute('d', d);
       this.outline.setAttribute('d', d);
+      this.edge.setAttribute('d', d);
       this.openShadow.setAttribute('d', d);
       this.outline.classList.remove('locked', 'good', 'bad');
-      this.outline.style.display = spec ? '' : 'none';
-      this.openShadow.style.display = spec ? '' : 'none';
+      [this.outline, this.edge, this.openShadow].forEach((n) => (n.style.display = spec ? '' : 'none'));
+    }
+
+    /* Danger pulse on the rim (zombie timer running out). */
+    setDanger(on) {
+      this.svg.classList.toggle('danger', !!on);
+    }
+
+    /* The glass reseals with a NEW opening: old cracks fade, a shimmer ring
+       sweeps the glass and the new opening fades in. */
+    async reform(spec) {
+      this.restore();
+      this.setTarget(spec);
+      ZD.audio.play('reform');
+      anime.remove([this.gOpen, this.lock]);
+      this.lock.setAttribute('stroke', '#bfe9ff');
+      anime({ targets: this.lock, opacity: [0.9, 0], scale: [0.86, 1.08], duration: D(520), easing: 'easeOutCubic', complete: () => this.lock.setAttribute('stroke', '#7CFF8A') });
+      await anime({ targets: this.gOpen, opacity: [0, 1], duration: D(420), delay: D(120), easing: 'easeOutQuad' }).finished;
     }
 
     /* 'approach' | 'good' | 'bad' | 'idle' */
@@ -217,14 +279,14 @@ window.ZD = window.ZD || {};
     shatter() {
       this.svg.classList.add('shattered');
       anime({ targets: [this.gGlass, this.cracks, this.rim, this.center], opacity: 0, duration: D(250), easing: 'linear' });
-      this.outline.style.display = 'none';
-      this.openShadow.style.display = 'none';
+      [this.outline, this.edge, this.openShadow].forEach((n) => (n.style.display = 'none'));
+      this.setDanger(false);
     }
 
     /* Mechanism unlocks after a correct hit: glass turns green and dissolves. */
     async unlock() {
-      this.outline.style.display = 'none';
-      this.openShadow.style.display = 'none';
+      [this.outline, this.edge, this.openShadow].forEach((n) => (n.style.display = 'none'));
+      this.setDanger(false);
       this.cut.setAttribute('d', '');
       await anime({ targets: this.lock, opacity: [0, 1], scale: [1, 1.08], duration: D(420), easing: 'easeOutCubic' }).finished;
       anime({ targets: this.lock, opacity: 0, duration: D(500), easing: 'linear' });
@@ -232,12 +294,14 @@ window.ZD = window.ZD || {};
     }
 
     restore() {
-      this.svg.classList.remove('cracked', 'shattered');
+      this.svg.classList.remove('cracked', 'shattered', 'danger');
       this.cracks.innerHTML = '';
       [this.gGlass, this.cracks, this.rim, this.center].forEach((n) => {
         n.style.opacity = '';
         n.removeAttribute('opacity');
       });
+      anime.remove(this.gOpen);
+      this.gOpen.style.opacity = '';
       this.tint.setAttribute('opacity', '0');
       this.tint.style.opacity = '';
       this.lock.setAttribute('opacity', '0');
@@ -424,12 +488,13 @@ window.ZD = window.ZD || {};
         return lay;
       };
       L(tiledLayer('sky', { y: -60, z: 1, factor: 0 }));
-      this.clouds = L(tiledLayer('clouds', { y: -40, z: 2, factor: 0.02, cls: 'far clouds', mirror: true }));
-      L(tiledLayer('skyline', { y: 150, z: 3, factor: 0.05, cls: 'far', mirror: true }));
+      this.clouds = cloudLayers([['cloud1', 120, 150, 0.6, false], ['cloud3', 760, 95, 0.55, true], ['cloud4', 1250, 230, 0.6, false], ['cloud2', 1650, 120, 0.5, true], ['cloud3', -260, 300, 0.5, false]], 0.02).map(L);
+      // no sun in the front view (it competes with the window); the side view keeps its sun
+      L(tiledLayer('skyline', { y: skylineTop(574), z: 3, factor: 0.05, cls: 'far', mirror: true, scale: S_FAR }));
       L(tiledLayer('haze', { y: 230, z: 4, factor: 0, opacity: 0.55, cls: 'far', mirror: true }));
       L(tiledLayer('mountains', { y: 440, z: 5, factor: 0.08, cls: 'far', mirror: true }));
-      L(propLayer('tower', { x: -40, y: 780, scale: 0.72, z: 6, factor: 0.12, cls: 'mid' }));
-      L(propLayer('tree', { x: 1440, y: 760, scale: 0.8, z: 6, factor: 0.14, cls: 'mid' }));
+      // the side view's tree stands on the left, where the side view has its watchtower
+      L(propLayer('tree', { x: -150, y: 760, scale: 0.8, z: 6, factor: 0.12, cls: 'mid' }));
       /* Ground, road and fences are pre-rendered by tools/build-assets.py
          (build_front_road) from ONE perspective camera, so the wall reads as
          standing IN the road:  vanishing point (960, 610), camera height 470,
@@ -442,26 +507,72 @@ window.ZD = window.ZD || {};
       };
       this.el.appendChild(baked('frontGround', 7));
 
-      // scenery outside the fences (seen through the chain-link)
+      /* Scenery on the land outside the fences.  Unlike the side view (watch-
+         tower + one tree) this view has a row of dry trees along the horizon
+         and small grass and rocks
+         scattered over the ground.  [key, left x, baseline y, scale];
+         drawn far-to-near so nearer things overlap farther ones. */
       const propsEl = el('div', { class: 'props', style: { zIndex: 8 } });
       this.el.appendChild(propsEl);
-      [[-260, 690, 'grass2'], [-60, 720, 'rock3'], [190, 660, 'grass5'], [420, 640, 'grass7'], [80, 800, 'grass1'], [1560, 650, 'grass6'], [1780, 700, 'grass4'], [1980, 760, 'rock4'], [2120, 690, 'grass3'], [1700, 820, 'grass2']].forEach(([x, y, k]) => {
-        const sc = 0.4 + ((y - 600) / 480) * 0.8;
-        propsEl.appendChild(propLayer(k, { x, y, scale: sc, z: 8 }).node);
+      const scenery = [
+        // dry trees along the horizon (left and right of the road)
+        ['dryTree9', 400, 640, 0.68], ['dryTree11', -60, 665, 0.75],
+        ['dryTree2', 1270, 636, 0.66], ['dryTree6', 1480, 652, 0.8], ['dryTree12', 1700, 672, 0.95],
+        // small grass and rocks, smaller with distance
+        ['grass7', 560, 640, 0.3], ['rock8', 420, 652, 0.32], ['grass6', 1250, 646, 0.3], ['rock7', 1400, 660, 0.34],
+        ['grass5', 330, 690, 0.36], ['rock6', 160, 712, 0.38], ['grass4', 1460, 700, 0.38], ['rock8', 1640, 716, 0.4],
+        ['grass6', 1880, 690, 0.4], ['grass3', -60, 760, 0.44], ['rock5', 300, 790, 0.42], ['grass7', 1560, 780, 0.46],
+        ['rock6', 1820, 800, 0.46], ['grass5', 120, 870, 0.5], ['rock7', 1700, 900, 0.5], ['grass2', -80, 960, 0.56],
+        ['rock4', 1840, 990, 0.52], ['grass6', 1520, 1010, 0.56], ['rock8', 60, 1050, 0.6],
+      ];
+      scenery.sort((a, b) => a[2] - b[2]).forEach(([k, x, y, sc]) => propsEl.appendChild(propLayer(k, { x, y, scale: sc, z: 8 }).node));
+
+      /* Small rocks lying on the brick road: [key, centre x, baseline y, size].
+         Scaled by depth on the road plane (k = (y - 610) / 470, 1 at the stage
+         bottom) and darkened toward the far end like the road; drawn under the
+         fences, so one near an edge tucks under the fence.  Kept off the
+         hero's spot (x 310-470). */
+      const roadRocks = [
+        ['rock8', 862, 818, 0.9], ['rock8', 884, 821, 0.55],
+        ['rock7', 1088, 836, 0.75],
+        ['rock8', 700, 866, 1.0],
+        ['rock6', 1232, 884, 0.55], ['rock8', 1262, 888, 0.6],
+        ['rock7', 936, 912, 0.8],
+        ['rock8', 1452, 964, 1.0], ['rock8', 1480, 968, 0.6],
+        ['rock7', 1530, 1012, 0.9],
+        ['rock8', 560, 1036, 0.9],
+      ];
+      roadRocks.forEach(([k, cx, y, size]) => {
+        const depth = (y - 610) / 470;
+        const scale = size * depth;
+        const p = propLayer(k, { x: Math.round(cx - (A.image(k).w * scale) / 2), y, scale, z: 8 });
+        const t = Math.min(1, Math.max(0, (y - 790) / 290));
+        p.node.style.filter = `brightness(${(0.84 + 0.16 * t).toFixed(2)}) drop-shadow(0 ${Math.max(1, Math.round(3 * depth))}px 1px rgba(40, 10, 0, 0.45))`;
+        propsEl.appendChild(p.node);
       });
 
       // chain-link fences lining both sides of the road
       this.el.appendChild(baked('frontFences', 9));
 
       // the wall, standing across the road (fence to fence)
+      /* Placed by its base, not its hole: the base stands on the road at
+         WALL_BASE_Y (just past the brick road's far edge, y 790) and the wall
+         is exactly as wide as the road there, fence to fence (FRONT_CAM in
+         tools/build-assets.py: half-width 742 * (y - 610) / 470).  The hole
+         and the glass follow from the art. */
       const wall = A.wall('front');
-      this.hole = { x: 960, y: 430 };
-      this.wallScale = 146 / ((wall.hole.rx + wall.hole.ry) / 2);
+      const WALL_BASE_Y = 798;
+      const span = (2 * 742 * (WALL_BASE_Y - 610)) / 470;
+      this.wallScale = span / wall.w;
       const ww = Math.round(wall.w * this.wallScale);
       const wh = Math.round(wall.h * this.wallScale);
-      this.R = Math.round(((wall.hole.rx + wall.hole.ry) / 2) * this.wallScale);
-      const wx = this.hole.x - wall.hole.cx * this.wallScale;
-      const wy = this.hole.y - wall.hole.cy * this.wallScale;
+      const wx = Math.round(960 - ww / 2);
+      const wy = WALL_BASE_Y - wh;
+      this.hole = { x: wx + wall.hole.cx * this.wallScale, y: wy + wall.hole.cy * this.wallScale };
+      // the glass reaches 2px under the opening's edge so it sits flush on the
+      // bricks (no dark gap from the art's outline around the hole)
+      const GLASS_OVERLAP = 2;
+      this.R = Math.round(((wall.hole.rx + wall.hole.ry) / 2) * this.wallScale) + GLASS_OVERLAP;
       // contact shadow on the road under the wall's base
       this.el.appendChild(el('div', { class: 'wall-shadow', style: { left: wx - 30 + 'px', top: wy + wh - 18 + 'px', width: ww + 60 + 'px', height: '40px', zIndex: 10 } }));
       // corner rocks + grass in the foreground (as in the land art)
@@ -471,11 +582,17 @@ window.ZD = window.ZD || {};
         fore.appendChild(propLayer(k, { x, y, scale: sc, z: 13 }).node);
       });
 
-      // zombie waits behind the wall, visible through the opening
+      // zombie waits behind the wall, visible through the opening.  Its
+      // distance from the glass is the timer: ZPOSE.far (head just above the
+      // sill) -> ZPOSE.near (face pressed to the glass); see zombieClimb().
       this.zombie = new ZD.Sprite({ className: 'char-zombie behind', zIndex: 10 });
       this.zombie.setSheet('zombie.front.idle');
-      this.zombie.setPos(this.hole.x, this.hole.y + this.R * 0.98);
-      this.zombie.setScale(1.0);
+      this.zpose = {
+        far: { y: this.hole.y + this.R * 1.55, s: 0.92 },
+        mid: { y: this.hole.y + this.R * 1.05, s: 1.1 },
+        near: { y: this.hole.y + this.R * 1.14, s: 1.85 },
+      };
+      this._placeZombie(this.zpose.mid, 0);
       this.el.appendChild(this.zombie.el);
       // soft dark interior behind the glass so the zombie reads as "beyond"
       this.interior = el('div', { class: 'interior', style: { left: this.hole.x - this.R + 'px', top: this.hole.y - this.R + 'px', width: this.R * 2 + 'px', height: this.R * 2 + 'px', zIndex: 10 } });
@@ -485,6 +602,11 @@ window.ZD = window.ZD || {};
       this.glass = new GlassMech({ cx: this.hole.x, cy: this.hole.y, r: this.R });
       this.glass.el.style.zIndex = 12;
       this.el.appendChild(this.glass.el);
+
+      // zombie health: one glowing orb per hit still needed, on a plaque
+      // fixed to the bricks under the window
+      this.hpEl = el('div', { class: 'zombie-hp', style: { left: this.hole.x + 'px', top: this.hole.y + this.R + 46 + 'px', zIndex: 12 } });
+      this.el.appendChild(this.hpEl);
 
       // hero (back view) in the foreground
       this.hero = new ZD.Sprite({ className: 'char-hero', zIndex: 20 });
@@ -508,6 +630,7 @@ window.ZD = window.ZD || {};
     setScroll(px) {
       this.layers.forEach((l) => {
         if (l.tiled) scrollTiled(l, px);
+        else if (l.cloud) placeCloud(l, px);
         else if (l.factor) l.node.style.transform = `translateX(${-px * l.factor}px)`;
       });
     }
@@ -519,6 +642,117 @@ window.ZD = window.ZD || {};
     idle() {
       this.hero.play({ sheet: 'hero.backIdle', fps: 9, loop: true });
       this.zombie.play({ sheet: 'zombie.front.idle', fps: 8, loop: true });
+    }
+
+    /* ---- zombie health pips ---- */
+    setZombieHp(n, max) {
+      this.hpEl.innerHTML = '';
+      this.hpEl.style.display = max > 1 ? '' : 'none'; // only when a wall needs several hits
+      for (let i = 0; i < max; i++) this.hpEl.appendChild(el('span', { class: 'hp' + (i < n ? '' : ' gone') }));
+    }
+    popZombieHp(index) {
+      const pip = this.hpEl.children[index];
+      if (!pip) return;
+      anime.remove(pip);
+      anime({ targets: pip, scale: [1, 1.7, 1], duration: D(420), easing: 'easeOutBack' });
+      ZD.clock.timeout(() => pip.classList.add('gone'), D(140));
+    }
+
+    /* ---- zombie behind the glass (the timer) ---- */
+    _placeZombie(p, bob) {
+      this.zombie.setScale(p.s);
+      this.zombie.setPos(this.hole.x + (p.x || 0), p.y + (bob || 0));
+      // the closer it is, the less the dark interior hides it
+      const k = clamp((p.s - this.zpose.far.s) / (this.zpose.near.s - this.zpose.far.s), 0, 1);
+      if (this.interior) this.interior.style.opacity = String(1 - 0.55 * k);
+    }
+
+    stopZombie() {
+      if (this._zAnim) {
+        this._zAnim._killed = true; // never restarted by a pause-menu resume
+        this._zAnim.pause();
+      }
+      this._zAnim = null;
+      this.climbing = false;
+      this.glass.setDanger(false);
+    }
+
+    /* No timer: the zombie paces from side to side behind the glass. */
+    zombiePace() {
+      this.stopZombie();
+      const z = this.zombie;
+      z.play({ sheet: 'zombie.front.run', fps: 9, loop: true });
+      const base = Object.assign({}, this.zpose.mid);
+      const o = { x: 0 };
+      this._placeZombie(base, 0);
+      this._zAnim = anime({ targets: o, x: [-this.R * 0.42, this.R * 0.42], duration: 2600, direction: 'alternate', loop: true, easing: 'easeInOutSine', update: () => this._placeZombie(Object.assign({}, base, { x: o.x }), 0) });
+    }
+
+    /* Timer: the zombie climbs from far below the sill up to the glass in
+       `ms`.  Resolves 'timeout' when it gets there; stopZombie() cancels.
+       Paused with the game (anime + ZD.clock). */
+    zombieClimb(ms) {
+      this.stopZombie();
+      const z = this.zombie;
+      z.play({ sheet: 'zombie.front.run', fps: 7, loop: true });
+      const { far, near } = this.zpose;
+      const o = { p: 0 };
+      const steps = Math.max(4, Math.round(ms / 1600)); // hand-over-hand pulls
+      let lastStep = 0;
+      let lastBeat = 0;
+      this._placeZombie(far, 0);
+      this.climbing = true;
+      return new Promise((resolve) => {
+        this._zAnim = anime({
+          targets: o,
+          p: 1,
+          duration: ms,
+          easing: 'linear',
+          update: () => {
+            const p = o.p;
+            // each pull is quick then a pause: a stepped climb, not a glide
+            const f = p * steps;
+            const stepP = (Math.floor(f) + ZD.util.easeOutCubic(f % 1)) / steps;
+            const q = Math.min(1, stepP);
+            this._placeZombie({ y: far.y + (near.y - far.y) * q, s: far.s + (near.s - far.s) * q }, -Math.sin((f % 1) * Math.PI) * 10);
+            if (Math.floor(f) !== lastStep) {
+              lastStep = Math.floor(f);
+              ZD.audio.play('scrape');
+            }
+            const danger = p > 0.7;
+            this.glass.setDanger(danger);
+            if (danger && performance.now() - lastBeat > 850) {
+              lastBeat = performance.now();
+              ZD.audio.play('heartbeat');
+            }
+          },
+          complete: () => {
+            this._zAnim = null;
+            this.climbing = false;
+            resolve('timeout');
+          },
+        });
+      });
+    }
+
+    /* Hit (not the knockout): the zombie reels and drops back from the glass. */
+    async zombieKnockBack() {
+      this.stopZombie();
+      const z = this.zombie;
+      const from = { y: z.y, s: z.scale };
+      const to = this.zpose.far;
+      const o = { t: 0 };
+      z.play({ sheet: 'zombie.front.hit', fps: 14 });
+      await anime({ targets: o, t: 1, duration: D(650), easing: 'easeInBack', update: () => this._placeZombie({ y: from.y + (to.y + this.R * 0.3 - from.y) * o.t, s: from.s + (to.s - from.s) * o.t }, 0) }).finished;
+    }
+
+    /* Time out: the zombie bangs on the glass until it cracks. */
+    async zombieBang() {
+      this.stopZombie();
+      const z = this.zombie;
+      this._placeZombie(this.zpose.near, 0);
+      ZD.audio.play('groan');
+      await z.play({ sheet: 'zombie.front.attack', fps: 20 });
     }
   }
 
@@ -536,27 +770,51 @@ window.ZD = window.ZD || {};
         return lay;
       };
       L(tiledLayer('sky', { y: -60, z: 1, factor: 0 }));
-      this.clouds = L(tiledLayer('clouds', { y: -50, z: 2, factor: 0.04, cls: 'far clouds', mirror: true }));
-      L(tiledLayer('skyline', { y: 110, z: 3, factor: 0.1, cls: 'far', mirror: true }));
+      this.clouds = cloudLayers([['cloud2', 60, 140, 0.55, false], ['cloud3', 620, 250, 0.6, false], ['cloud1', 1080, 110, 0.55, true], ['cloud4', 1560, 220, 0.55, true], ['cloud3', 2000, 90, 0.5, false], ['cloud1', -280, 280, 0.45, false]], 0.04).map(L);
+      L(sunLayer({ x: 1480, y: 330, d: 230, factor: 0.08 }));
+      L(tiledLayer('skyline', { y: skylineTop(534), z: 3, factor: 0.1, cls: 'far', mirror: true, scale: S_FAR }));
       L(tiledLayer('haze', { y: 200, z: 4, factor: 0.12, opacity: 0.6, cls: 'far', mirror: true }));
       L(tiledLayer('mountains', { y: 420, z: 5, factor: 0.2, cls: 'far', mirror: true }));
-      this.tower = L(propLayer('tower', { x: -140, y: 820, scale: 0.82, z: 6, factor: 0.45, cls: 'mid' }));
+      // watchtower a little way off, whole and on screen: standing on the
+      // ground just behind the fence, with mid-distance grading and parallax
+      this.tower = L(propLayer('tower', { x: 40, y: 762, scale: 0.74, z: 6, factor: 0.4, cls: 'mid' }));
       this.tree = L(propLayer('tree', { x: 1420, y: 800, scale: 0.9, z: 6, factor: 0.55, cls: 'mid' }));
       L(tiledLayer('fenceFront', { y: 416, z: 7, factor: 0.7, cls: 'mid', mirror: true }));
-      this.groundY = 790;
-      L(tiledLayer('landRoad', { y: 776, z: 8, factor: 1, h: 520, bg: '#71395e', mirror: true }));
+      /* Road (land/image copy.png): a brick walkway whose top surface is visible.
+         ROAD.y is the layer top; at ROAD.scale its top surface runs from
+         ROAD.back (far edge) to ROAD.front (near edge).  Characters stand on it
+         at groundY; the wall's base sits between roadBack and roadFront (below). */
+      const ROAD = { y: 712, scale: 1.25 };
+      ROAD.back = ROAD.y + 4 * ROAD.scale; // image rows, relative to the built crop
+      ROAD.front = ROAD.y + 98 * ROAD.scale;
+      this.road = ROAD;
+      this.groundY = 770;
+      // dirt verge below the (lower) road; drawn first so the road's
+      // shadowed bottom edge overlaps it
+      ROAD.bottom = ROAD.y + Math.round(A.image('roadTop').h * ROAD.scale);
+      L(tiledLayer('dirt', { y: ROAD.bottom - 14, z: 8, factor: 1, h: 1080 - ROAD.bottom + 14, scale: 0.55, mirror: true }));
+      L(tiledLayer('roadTop', { y: ROAD.y, z: 8, factor: 1, scale: ROAD.scale, mirror: true }));
       // props on the wall-top (scroll with the ground)
       this.props = [];
       const propsEl = el('div', { class: 'props', style: { zIndex: 9 } });
       this.el.appendChild(propsEl);
-      [[-200, 'grass3'], [120, 'rock5'], [640, 'grass6'], [1180, 'grass4'], [1700, 'rock6'], [2050, 'grass2'], [-20, 'rock8'], [1350, 'grass7']].forEach(([x, k]) => {
-        const p = propLayer(k, { x, y: this.groundY + 4, scale: 0.6, z: 9, factor: 1 });
+      [[-200, 'grass3'], [120, 'rock5'], [640, 'grass6'], [1180, 'grass4'], [1700, 'rock6'], [2050, 'grass2'], [-20, 'rock8'], [1350, 'grass7'], [420, 'rock7'], [880, 'grass5'], [1540, 'rock8'], [1880, 'grass7'], [2180, 'rock7']].forEach(([x, k]) => {
+        const p = propLayer(k, { x, y: ROAD.back + 14, scale: k.startsWith('rock') ? 0.42 : 0.5, z: 9, factor: 1 });
         p.home = x;
         propsEl.appendChild(p.node);
         this.props.push(p);
       });
-      [[-300, 'rock1'], [700, 'rock2'], [1500, 'rock3'], [2200, 'rock4'], [300, 'grass1'], [1900, 'grass2']].forEach(([x, k]) => {
-        const p = propLayer(k, { x, y: 1060, scale: 1.0, z: 9, factor: 1.08 });
+      // the dirt verge: grass tufts along the road's foot, rocks and big
+      // tufts nearer the camera.  [x, key, baseline y, scale, parallax]
+      const vb = ROAD.bottom;
+      [
+        [-120, 'grass5', vb + 14, 0.62, 1], [260, 'grass7', vb + 12, 0.58, 1], [520, 'rock8', vb + 26, 0.5, 1], [760, 'grass3', vb + 16, 0.6, 1],
+        [1040, 'grass6', vb + 12, 0.56, 1], [1290, 'rock7', vb + 28, 0.48, 1], [1460, 'grass4', vb + 14, 0.6, 1], [1760, 'grass5', vb + 12, 0.58, 1],
+        [2010, 'rock6', vb + 26, 0.5, 1], [2230, 'grass7', vb + 14, 0.6, 1],
+        [-300, 'rock1', 1095, 0.7, 1.08], [700, 'rock2', 1100, 0.65, 1.08], [1500, 'rock3', 1095, 0.7, 1.08], [2200, 'rock4', 1100, 0.65, 1.08],
+        [300, 'grass1', 1092, 0.75, 1.08], [1100, 'grass2', 1095, 0.6, 1.08], [1900, 'grass2', 1092, 0.75, 1.08], [60, 'rock5', 1070, 0.45, 1.04], [1680, 'rock6', 1072, 0.45, 1.04],
+      ].forEach(([x, k, y, scale, factor]) => {
+        const p = propLayer(k, { x, y, scale, z: 9, factor });
         p.home = x;
         propsEl.appendChild(p.node);
         this.props.push(p);
@@ -565,67 +823,77 @@ window.ZD = window.ZD || {};
       // walls: two slots so the next checkpoint can slide in while this one leaves
       this.wallHome = 985; // x of the wall's left edge at rest
       const wallDef = A.wall('angle1');
-      this.wallScale = 1.12;
+      // same on-screen size as with the first wall art (see-through height 126.6)
+      this.wallScale = 126.6 / wallDef.hole.ry;
       this.wallW = Math.round(wallDef.w * this.wallScale);
       this.wallH = Math.round(wallDef.h * this.wallScale);
+      // see-through part of the hole (the leap cover is cut at its centre)
       this.holeOffset = { x: wallDef.hole.cx * this.wallScale, y: wallDef.hole.cy * this.wallScale };
-      this.holeRy = wallDef.hole.ry * this.wallScale;
-      this.holeRx = wallDef.hole.rx * this.wallScale;
+      /* The glass fills the hole's FRONT opening (the rim on the wall face,
+         incl. the brick tunnel seen through it), an ellipse fitted in
+         build_walls (`rim`: centre, semi-axes, tilt). */
+      const rim = wallDef.rim;
+      this.rimOffset = { x: rim.cx * this.wallScale, y: rim.cy * this.wallScale };
+      const GLASS_OVERLAP = 2; // as in the front view: flush with the bricks, no gap
+      this.holeRy = rim.ry * this.wallScale + GLASS_OVERLAP;
+      this.holeRx = rim.rx * this.wallScale + GLASS_OVERLAP;
+      this.holeRot = rim.rot;
 
-      /* Plant the wall ON the road.  The angle1 art's base runs from its far
-         corner (x 0, y 506) down to its near corner (x 265, y 598) - steeper
-         than the narrow road strip (y ~803 back edge .. ~842 front edge).  So:
-         drop the wall until the near corner stands on the front edge, then
-         skew it vertically about that corner so the far corner lands on the
-         back edge.  Verticals stay vertical; the art and everything drawn on
-         it (glass, cover, hole target) share one transform. */
-      const roadBack = 803;
-      const roadFront = 842;
-      const near = { x: 265 * this.wallScale, y: 598 * this.wallScale };
-      const far = { x: 0, y: 506 * this.wallScale };
-      this.wallTop = roadFront - near.y;
-      this.skewOrigin = { x: this.wallHome + near.x, y: roadFront };
-      this.skewTan = (roadBack - (this.wallTop + far.y) - (roadFront - (this.wallTop + near.y))) / (far.x - near.x);
-      this.skewCss = `skewY(${(Math.atan(this.skewTan) * 180) / Math.PI}deg)`;
-      this.baseLine = { x0: this.wallHome + far.x, y0: roadBack, x1: this.skewOrigin.x, y1: roadFront };
+      /* Stand the wall (the least-turned wall of wall/image copy.png, drawn as
+         it is - no skew) on the road's top surface.  Its base runs from the
+         far corner down to the near corner (both measured by build_walls):
+         the near corner stands just behind the road's front edge, which puts
+         the far corner just inside the back edge. */
+      const near = { x: wallDef.base.near.x * this.wallScale, y: wallDef.base.near.y * this.wallScale };
+      const far = { x: wallDef.base.far.x * this.wallScale, y: wallDef.base.far.y * this.wallScale };
+      const nearY = ROAD.front - 10;
+      this.wallTop = nearY - near.y;
+      this.baseLine = { x0: this.wallHome + far.x, y0: this.wallTop + far.y, x1: this.wallHome + near.x, y1: nearY };
 
       this.walls = [this._makeWall(), this._makeWall()];
       this.cur = 0;
       this.walls[1].root.style.display = 'none';
 
-      this.hole = this._skewPt(this.wallHome + this.holeOffset.x, this.wallTop + this.holeOffset.y);
+      this.hole = { x: this.wallHome + this.rimOffset.x, y: this.wallTop + this.rimOffset.y };
 
       // Depth cover for leaps through the circle: a copy of the wall's far half
       // (right of the hole centre), drawn above the characters.  Whatever has
       // passed the wall plane is hidden by bricks and seen only through the
       // (transparent) hole.  Shown only while someone goes through the wall.
       this.cover = el('div', { class: 'wall-cover-wrap', style: { zIndex: 21, display: 'none' } });
-      const coverSkew = this._skewBox();
+      const coverBox = this._wallBox();
       const coverSvg = svg('svg', { class: 'wall-cover', width: this.wallW, height: this.wallH, viewBox: `0 0 ${this.wallW} ${this.wallH}` });
       Object.assign(coverSvg.style, { left: this.wallHome + 'px', top: this.wallTop + 'px' });
       const cm = svg('mask', { id: 'wall-cover-m' });
       cm.append(svg('rect', { x: this.holeOffset.x, y: 0, width: this.wallW, height: this.wallH, fill: 'white' }));
       coverSvg.append(svg('defs', {}, [cm]), svg('image', { href: A.wallUrl('angle1'), width: this.wallW, height: this.wallH, preserveAspectRatio: 'none', mask: 'url(#wall-cover-m)' }));
-      coverSkew.appendChild(coverSvg);
-      this.cover.appendChild(coverSkew);
+      coverBox.appendChild(coverSvg);
+      this.cover.appendChild(coverBox);
       this.el.appendChild(this.cover);
-      // feet -> body-centre distance (scaled px), measured from the sheets
-      this.heroCore = 150;
-      this.zombieCore = 120;
+      // character sizes in the side view
+      this.heroScale = 0.86;
+      this.zombieScale = 1.38;
+      // feet -> body-centre distance (scaled px), measured from the sheets;
+      // heroLeapCore is for hero.sideLeap, whose mid-air frames sit higher
+      this.heroCore = Math.round(150 * this.heroScale);
+      this.heroLeapCore = Math.round(205 * this.heroScale);
+      this.zombieCore = Math.round(75 * this.zombieScale);
+      // zombie.side.leap mid-air frames (incl. its 0.9 scaleAdjust), tilted 30deg
+      this.zombieLeapCore = Math.round(185 * this.zombieScale);
 
       // characters
       this.heroHome = { x: 330, y: this.groundY };
       this.hero = new ZD.Sprite({ className: 'char-hero', zIndex: 20 });
       this.hero.setSheet('hero.sideIdle');
-      this.hero.setScale(1.0);
+      this.hero.setScale(this.heroScale);
       this.hero.setPos(this.heroHome.x, this.heroHome.y);
       this.el.appendChild(this.hero.el);
-      this.heroHand = { x: 500, y: this.groundY - 190 };
+      this.heroHand = { x: this.heroHome.x + Math.round(170 * this.heroScale), y: this.groundY - Math.round(190 * this.heroScale) };
 
       this.zombieHome = { x: 1500, y: this.groundY + 4 };
       this.zombie = new ZD.Sprite({ className: 'char-zombie', zIndex: 18 });
       this.zombie.setSheet('zombie.side.idle');
-      this.zombie.setScale(1.6);
+      this.zombie.setScale(this.zombieScale);
       this.zombie.setPos(this.zombieHome.x, this.zombieHome.y);
       this.el.appendChild(this.zombie.el);
 
@@ -643,14 +911,9 @@ window.ZD = window.ZD || {};
       this.setScroll(0);
     }
 
-    /* point in the wall's unskewed layout -> where it is drawn */
-    _skewPt(x, y) {
-      return { x, y: y + (x - this.skewOrigin.x) * this.skewTan };
-    }
-
-    /* full-stage box carrying the wall's skew */
-    _skewBox() {
-      return el('div', { class: 'wall-skew', style: { transformOrigin: `${this.skewOrigin.x}px ${this.skewOrigin.y}px`, transform: this.skewCss } });
+    /* full-stage box holding the wall art and what is drawn on it */
+    _wallBox() {
+      return el('div', { class: 'wall-box' });
     }
 
     _makeWall() {
@@ -659,9 +922,9 @@ window.ZD = window.ZD || {};
       const b = this.baseLine;
       const len = Math.hypot(b.x1 - b.x0, b.y1 - b.y0);
       const shadow = el('div', { class: 'wall-shadow', style: { left: (b.x0 + b.x1) / 2 - len * 0.6 + 'px', top: (b.y0 + b.y1) / 2 - 16 + 'px', width: len * 1.2 + 'px', transform: `rotate(${(Math.atan2(b.y1 - b.y0, b.x1 - b.x0) * 180) / Math.PI}deg)` } });
-      const body = this._skewBox();
+      const body = this._wallBox();
       const img = el('div', { class: 'wall-side', style: { left: this.wallHome + 'px', top: this.wallTop + 'px', width: this.wallW + 'px', height: this.wallH + 'px', backgroundImage: `url("${A.wallUrl('angle1')}")` } });
-      const glass = new GlassMech({ cx: this.wallHome + this.holeOffset.x, cy: this.wallTop + this.holeOffset.y, r: this.holeRy, squash: this.holeRx / this.holeRy });
+      const glass = new GlassMech({ cx: this.wallHome + this.rimOffset.x, cy: this.wallTop + this.rimOffset.y, r: this.holeRy, squash: this.holeRx / this.holeRy, rot: this.holeRot });
       body.append(img, glass.el);
       root.append(shadow, body);
       this.el.appendChild(root);
@@ -685,6 +948,7 @@ window.ZD = window.ZD || {};
       // props keep their `left`; only transform moves (and wraps) them
       this.layers.forEach((l) => {
         if (l.tiled) scrollTiled(l, px);
+        else if (l.cloud) placeCloud(l, px);
         else if (l.factor) l.node.style.transform = `translateX(${wrapX(l.x - px * l.factor, l.w) - l.x}px)`;
       });
       this.props.forEach((p) => {
@@ -707,9 +971,11 @@ window.ZD = window.ZD || {};
     /* Leap a character head-first through the wall's circle.
        Feet start at (x0, y) and land at (x1, y); the body centre follows a
        parabola whose midpoint is the hole centre, rotating to horizontal
-       (dive) exactly as it crosses the wall.  onCross fires when the head
-       reaches the hole (glass break / whoosh).  Caller shows the cover. */
-    async leapThrough(sprite, { x0, x1, y, core, duration = 900, onCross } = {}) {
+       (dive) exactly as it crosses the wall.  `tilt` is the peak rotation
+       (90 = dive; a small lean for an upright leap sheet).  onProgress(t)
+       lets the caller drive frames from the arc.  onCross fires when the
+       head reaches the hole (glass break / whoosh).  Caller shows the cover. */
+    async leapThrough(sprite, { x0, x1, y, core, duration = 900, tilt = 90, onProgress, onCross } = {}) {
       const dir = Math.sign(x1 - x0) || 1;
       const H = this.hole;
       const P0 = { x: x0, y: y - core };
@@ -722,10 +988,11 @@ window.ZD = window.ZD || {};
         const u = 1 - t;
         const cx = u * u * P0.x + 2 * u * t * P1.x + t * t * P2.x;
         const cy = u * u * P0.y + 2 * u * t * P1.y + t * t * P2.y;
-        const deg = dir * 90 * Math.sin(Math.PI * t);
+        const deg = dir * tilt * Math.sin(Math.PI * t);
         const r = (deg * Math.PI) / 180;
         sprite.setRotation(deg);
         sprite.setPos(cx - core * Math.sin(r), cy + core * Math.cos(r));
+        onProgress && onProgress(t);
         if (!crossed && t >= 0.4) {
           crossed = true;
           onCross && onCross();
@@ -782,46 +1049,65 @@ window.ZD = window.ZD || {};
       this.hero.play({ sheet: 'hero.sideIdle', fps: 9, loop: true });
     }
 
-    /* Finale gate: pillars, metal gate, SAFE ZONE sign, survivors, shield. */
+    /* Finale: the SAFE ZONE building (assets/images/land/safe zone.png).
+       The tower's front panel (green banner) is its door. */
     _buildGate(offset) {
       if (this.gate) this.gate.remove();
-      const g = el('div', { class: 'gate', style: { left: this.wallHome - 40 + 'px', top: this.groundY - 520 + 'px', zIndex: 12 } });
-      g.innerHTML = `
-        <div class="gate-survivors">
-          <svg viewBox="0 0 400 160" width="400" height="160">
-            <g fill="#2a123f" opacity="0.9">
-              <g class="surv" transform="translate(40,20)"><circle cx="0" cy="18" r="16"/><rect x="-14" y="36" width="28" height="70" rx="10"/><rect class="arm" x="-30" y="40" width="14" height="48" rx="7"/></g>
-              <g class="surv" transform="translate(120,40)"><circle cx="0" cy="14" r="13"/><rect x="-12" y="30" width="24" height="60" rx="9"/><rect class="arm" x="12" y="30" width="12" height="44" rx="6"/></g>
-              <g class="surv" transform="translate(210,10)"><circle cx="0" cy="20" r="18"/><rect x="-16" y="40" width="32" height="80" rx="11"/><rect class="arm" x="16" y="36" width="14" height="52" rx="7"/></g>
-              <g class="surv" transform="translate(300,45)"><circle cx="0" cy="12" r="11"/><rect x="-10" y="26" width="20" height="50" rx="8"/><rect class="arm" x="-24" y="30" width="11" height="40" rx="5"/></g>
-            </g>
-          </svg>
-        </div>
-        <div class="gate-pillar left"></div>
-        <div class="gate-pillar right"></div>
-        <div class="gate-bars"></div>
-        <div class="gate-sign"><span>${ZD.T('intro3Safe')}</span></div>
-        <div class="gate-lamp warn"></div>
-        <div class="shield"></div>`;
+      const img = A.image('safeZone');
+      const S = SAFE_ZONE.scale;
+      const w = Math.round(img.w * S);
+      const h = Math.round(img.h * S);
+      const g = el('div', { class: 'gate safe-zone', style: { left: SAFE_ZONE.left + 'px', top: this.groundY + SAFE_ZONE.sink - h + 'px', width: w + 'px', height: h + 'px', zIndex: 12 } });
+      g.append(el('div', { class: 'safe-zone-art', style: { backgroundImage: `url("${A.imageUrl('safeZone')}")` } }));
+      // the art has the English sign baked in; other languages get a label over it
+      if (window.I18n && I18n.lang !== 'en') {
+        const p = SAFE_ZONE.plaque;
+        g.append(el('div', { class: 'safe-label', text: ZD.T('intro3Safe'), style: { left: p.x * S + 'px', top: p.y * S + 'px', width: p.w * S + 'px', height: p.h * S + 'px', fontSize: p.h * S * 0.62 + 'px' } }));
+      }
+      const d = SAFE_ZONE.door;
+      const door = el('div', { class: 'safe-door', style: { left: d.x * S + 'px', top: d.y * S + 'px', width: d.w * S + 'px', height: d.h * S + 'px' } });
+      door.append(el('div', { class: 'safe-door-light' }));
+      g.append(door);
       this.el.appendChild(g);
       this.gate = g;
       this.gateOffset = offset;
+      this.doorX = SAFE_ZONE.left + (d.x + d.w / 2) * S; // stage x of the door centre (at rest)
       g.style.transform = `translateX(${offset}px)`;
     }
 
-    async activateShield() {
+    /* The door rolls open, the hero runs in, and it shuts behind them. */
+    async enterSafeZone() {
       if (!this.gate) return;
-      const lamp = this.gate.querySelector('.gate-lamp');
-      lamp.className = 'gate-lamp safe';
-      const sh = this.gate.querySelector('.shield');
-      sh.classList.add('on');
-      ZD.audio.play('shield');
-      await anime({ targets: sh, opacity: [0, 0.85], scale: [0.2, 1], duration: D(1100), easing: 'easeOutElastic(1, .6)' }).finished;
+      const light = this.gate.querySelector('.safe-door-light');
+      const hero = this.hero;
+      ZD.audio.play('unlock');
+      await anime({ targets: light, opacity: [0, 1], scaleY: [0, 1], duration: D(520), easing: 'easeOutCubic' }).finished;
+      hero.setFlip(false);
+      hero.play({ sheet: 'hero.sideRun', fps: 16, loop: true });
+      const stepTimer = setInterval(() => ZD.audio.play('step'), 230);
+      const o = { x: hero.x };
+      const dist = Math.abs(this.doorX - o.x);
+      await anime({ targets: o, x: this.doorX, duration: D(Math.max(600, dist * 1.25)), easing: 'easeInOutSine', update: () => hero.setPos(o.x, this.heroHome.y) }).finished;
+      clearInterval(stepTimer);
+      // step inside: shrink a touch into the doorway and vanish into the light
+      ZD.audio.play('whoosh');
+      const k = { s: this.heroScale };
+      await Promise.all([
+        anime({ targets: k, s: this.heroScale * 0.86, duration: D(420), easing: 'easeInQuad', update: () => hero.setScale(k.s) }).finished,
+        anime({ targets: hero.el, opacity: [1, 0], duration: D(420), easing: 'easeInQuad' }).finished,
+      ]);
+      hero.stop();
+      await anime({ targets: light, scaleY: [1, 0], duration: D(420), easing: 'easeInCubic' }).finished;
+      ZD.audio.play('thud');
+      fx.flash('#fff2a8', 300, 0.3);
+      fx.sparkles(this.fxLayer, this.doorX, this.heroHome.y - 180, 26, '#fff2a8');
     }
 
     removeGate() {
       if (this.gate) this.gate.remove();
       this.gate = null;
+      this.hero.setScale(this.heroScale);
+      this.hero.el.style.opacity = '';
     }
 
     /* Horde used by the intro. */
@@ -830,7 +1116,7 @@ window.ZD = window.ZD || {};
       for (let i = 0; i < n; i++) {
         const z = new ZD.Sprite({ className: 'char-zombie extra', zIndex: 17 - i });
         z.setSheet('zombie.side.run');
-        const sc = 1.45 - i * 0.2;
+        const sc = (1.45 - i * 0.2) * (this.zombieScale / 1.6);
         z.setScale(sc);
         z.setPos(2000 + i * 230, this.groundY + 4 - i * 6);
         z.play({ sheet: 'zombie.side.run', fps: 12 + i, loop: true });
@@ -860,7 +1146,14 @@ window.ZD = window.ZD || {};
       return name === 'front' ? this.front : this.side;
     }
 
+    /* The stage carries the current view (CSS: front-view-only layout,
+       e.g. the narrower message bar). */
+    _tag(name) {
+      document.getElementById('stage').dataset.view = name;
+    }
+
     cut(name) {
+      this._tag(name);
       ['front', 'side'].forEach((n) => {
         const s = this._scene(n).el;
         s.classList.toggle('active', n === name);
@@ -873,6 +1166,7 @@ window.ZD = window.ZD || {};
     /* Cinematic shift between views with a perspective swing + zoom. */
     async to(name, { duration = 820, zoomAt } = {}) {
       if (this.current === name) return;
+      this._tag(name);
       const from = this._scene(this.current).el;
       const to = this._scene(name).el;
       const dir = name === 'side' ? 1 : -1;
@@ -915,14 +1209,26 @@ window.ZD = window.ZD || {};
       worldEl.append(this.front.el, this.side.el);
       this.camera = new Camera(this.front, this.side);
       this.camera.cut('side');
-      // slow cloud drift (kept on the parallax path so it composes with scrolling)
-      const drift = { v: 0 };
-      anime({ targets: drift, v: 2560, duration: 240000, easing: 'linear', loop: true, update: () => {
-        this.front.clouds.drift = drift.v;
-        this.side.clouds.drift = drift.v;
-        scrollTiled(this.front.clouds, 0);
-        scrollTiled(this.side.clouds, this.side.scrollX);
-      } });
+      /* Clouds drift slowly right to left, each at its own speed (kept on the
+         parallax path so it composes with scrolling).  Time-based rAF loop;
+         a cloud's drift is kept modulo its wrap span (WORLD_W + width), so
+         it wraps seamlessly forever.  Paused with reduced motion. */
+      const CLOUD_PX_PER_S = 16;
+      let last = performance.now();
+      const tick = (now) => {
+        const dt = Math.min(0.1, (now - last) / 1000);
+        last = now;
+        if (!settings.reducedMotion) {
+          const step = (l, scroll) => {
+            l.drift = (l.drift + dt * CLOUD_PX_PER_S * l.speed) % (WORLD_W + l.w);
+            placeCloud(l, scroll);
+          };
+          this.front.clouds.forEach((l) => step(l, 0));
+          this.side.clouds.forEach((l) => step(l, this.side.scrollX));
+        }
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
       return this;
     },
     setReducedMotion(v) {

@@ -19,16 +19,42 @@ once loaded. Best on a landscape tablet; it scales to any 16:9 → 20:9 screen.
 
 ## How a wall plays out
 
-The wall is fixed in the ground; the learner picks the circle piece that fits
-its glass window (front view), then the outcome plays on the side view:
+(Redesigned from the LXD feedback, Nov 2026.)  One mission = **6 walls = 6
+questions**, one question per wall.  At the start of every play the six
+pieces (minor/major arc, sector, segment) are shuffled and dealt one per wall,
+so each piece is asked exactly once in a random order.  Each wall has one
+zombie behind a round glass window with one opening.  The learner always
+answers with the same **six pill buttons** in a side panel right of the wall
+("Which piece fits?"), in fixed type pairs - minor / major arc, sector,
+segment - so every answer needs both a type and a size (random guess = 1 in 6).  Buttons are
+never shuffled and use one neutral icon colour; colour appears only as
+feedback.
 
-* **Right piece** - it passes the window and knocks the zombie out; the glass
-  opens and the hero dives through the circle to the far side, then runs on
-  to the next wall.
-* **Wrong piece** - the glass cracks, the zombie dives through the circle,
-  shattering it, and knocks the hero out (one heart lost).  A security pulse
-  throws the zombie back through the circle and the hero gets up.  No hearts
-  left -> game over.
+* **Right piece** - it slips through the glass, the view switches to the
+  side, the zombie is knocked out, the window opens and the hero dives
+  through while the piece's name and rule are shown and read aloud (free
+  review), then runs to the next wall.  (`hits` > 1 on a wall would add
+  in-glass hits with new openings first; the shipped config uses 1.)
+* **Wrong piece** - it smashes the glass; the zombie dives through and knocks
+  the hero down (one heart lost, 3 per mission).  A lesson card then slides
+  the CORRECT piece into the gap (same orientation as the window), lights up
+  its parts (radii / chord / arc), shows a dashed "half" line for minor vs
+  major, and gives a one-line reason (read aloud).  "Got it!" asks the SAME
+  piece again in a different opening (new direction / size).
+* **Time out** - on timed walls the zombie climbs up behind the glass (the
+  timer is its distance; the rim pulses red in the last 30%).  When it gets
+  there it bangs through: same as a wrong piece, and the lesson still shows.
+* **No hearts left** - cartoon defeat, the same lesson, then retry the wall.
+
+Timers and difficulty per wall come from `rounds` in the config: walls 1-2
+clear sizes (none / 20 s), walls 3-4 rotated (15 / 14 s), walls 5-6 close to
+half (13 / 12 s).  The front view has no sun (it competed with the window).  The pause menu can switch the zombie timer off, plus
+read-aloud, sound and reduced motion.
+
+Every answer is logged on the device (`localStorage` key `zd.log`, last 400):
+mission, wall, opening, what was picked (or `timeout`) and time taken.  The
+mission-complete panel lists the top mix-ups ("Practise these"), and
+`ZD.report()` in the browser console prints a per-piece table for teachers.
 
 The intro shows both outcomes with the same code (`ZD.game.sideThrowDemo`,
 `zombieBreakIn`, `securityReset`, `heroJumpThrough`).  Leaps use
@@ -43,15 +69,16 @@ css/style.css              all styling (HUD, options, panels, fx)
 js/
   i18n.js                  game-i18n: T('key'), data-i18n, I18n.say (voice by key)
   core/util.js             DOM helpers, pausable clock, prefs
-  core/audio.js            procedural SFX (WebAudio); silent while page is inactive
+  core/audio.js            procedural SFX (WebAudio) + read-aloud fallback
+                           (speech); silent while page is inactive
   core/assets.js           manifest access + preloader
   core/sprites.js          sprite-sheet animator (one rAF ticker)
-  config/missions.js       missions → walls → challenges (data only)
-  geometry.js              arc/sector/segment/chord paths + correctness
+  config/missions.js       missions → walls → openings (data only)
+  geometry.js              arc/sector/segment paths, piece ids + correctness
   scene.js                 front & side parallax scenes, glass mechanism,
                            projectile, effects, camera transitions
-  ui.js                    HUD, prompt, answer options, stamps, panels
-  learn.js                 circle diagrams + game-over demonstration
+  ui.js                    HUD, six-button answer panel, stamps, panels, bottom message bar
+  learn.js                 lesson card: correct piece fills the gap + reason
   intro.js                 title + 3-scene cinematic
   game.js                  state machine (wall loop, outcomes, finale)
   main.js                  boot + viewport fitting
@@ -74,7 +101,14 @@ tools/build-assets.py      raw art → assets/build (Pillow, numpy, scipy)
   reference cards, component filtering of the noisy celebrate sheet),
 * repacks every animation into a uniform grid and records `cols/rows/frames`,
 * crops environment layers and measures each wall's circular opening
-  (`cx, cy, rx, ry`) so the glass mechanism is placed exactly,
+  (`cx, cy, rx, ry`) so the glass mechanism is placed exactly; walls come
+  from `wall/image copy 2.png` (front) and `wall/image copy.png` (three turned
+  views; the side view uses the least turned), black backdrop and hole keyed
+  out, the outline closed so the rounded brick corners leave no see-through
+  notches (filled with the art's mortar colour), and turned walls also
+  record their base corners (`base.far/near`) so the side view stands them
+  on the road; the side view's glass fills the hole's front opening
+  (`WALL_RIMS`, an ellipse fitted to the rim - re-fit if the art changes),
 * writes `manifest.json` and `manifest.js` (loaded as a classic script so the
   game works from `file://`).
 
@@ -91,6 +125,18 @@ tools/build-assets.py      raw art → assets/build (Pillow, numpy, scipy)
 Hero sheets are 4×3 grids (12 frames). Zombie side sheets are 4×N grids.
 Zombie front strips are extracted from the labelled reference cards.
 
+## Message bar
+
+Every in-play line - wall titles, the question, rule reviews, "checkpoint
+cleared", the intro alarm - appears in one bar at the bottom of the screen
+(`ZD.ui.showBanner(title, text, kind)` / `hideBanner()` / `caption(key)`).
+Its art is `assets/images/banner.png`, cleaned by `build_banner()` in
+`tools/build-assets.py` (crop, noisy portrait socket replaced by a dark disc)
+and stretched at runtime as a 9-slice, so the socket and stripes never
+distort.  The hero's profile picture (`boy/profile.png`, cropped by
+`build_profile()`) sits in the socket and in the HUD portrait.  Overlay screens (title,
+mission map, results, game over) keep their own panels.
+
 ## Front view (road, fences, wall)
 
 The front view's ground and fences are pre-rendered by `build_front_road()` in
@@ -99,31 +145,36 @@ Rocks.png`, tiled via `build_dirt()`) is projected onto the ground plane and
 the front-view fence art onto two planes lining the road, all from one camera
 (`FRONT_CAM`: vanishing point 960,610 - camera height 470 - perspective 1000 -
 road half-width 742).  At the wall's depth the road is exactly as wide as the
-wall, so the wall stands across the road fence to fence.  Change `FRONT_CAM`
-there (not in `js/scene.js`) and re-run the pipeline.
+wall, so the wall stands across the road fence to fence (the front scene
+places the wall by its base - y 798, as wide as the road there - and the hole
+and glass follow from the art).  The brick road art
+(`land/front-view road.png`, see `ROAD_ART`) is perspective-warped onto the
+ground between the fence base lines, from just under the wall's base (y 790)
+to the stage bottom.  Change `FRONT_CAM` there (not in `js/scene.js`) and
+re-run the pipeline.
 
 ## Adding questions / missions
 
-All learning content is data in `js/config/missions.js`:
+All learning content is data in `js/config/missions.js` (the file header
+documents every field):
 
 ```js
-{ mode: 'shape',                       // 'shape' | 'name' | 'identify'
-  target: P('sector', -35, 100),       // type, start angle, sweep (deg)
-  options: [P('arc', -35, 100), P('sector', -35, 100), P('segment', -35, 100)] }
+rounds: [{ tier: 'start', timer: null }, { tier: 'start', timer: 20 }, ...],  // one per wall
+openings: { start: tier([90], [270], [-90, 90, 0, 180]), middle: ..., hard: ... }
 ```
 
-* `sweep < 180` → minor, `> 180` → major (never use exactly 180).
-* `P(type, start, sweep, rot)` – `rot` only changes how the option thumbnail
-  is displayed (orientation transfer); the projectile aligns during flight.
-* `C(piece)` builds the complementary piece (minor ↔ major distractor).
-* A wall's `level` is `'basic'` (ARC/SECTOR/SEGMENT labels, type-only match)
-  or `'full'` (MINOR/MAJOR labels, type + size must match).
-* Append a mission object to `ZD.MISSIONS` to add a 3-wall mission; the
-  finale shows **Next mission** automatically.
+* There must be one round per piece (6).  Each tier needs at least 2
+  openings for every piece (retries use a different one); a guard at the
+  bottom of the file warns in the console otherwise.
+* `O(type, sweep, dir)` is one opening; `tier(minorSweeps, majorSweeps, dirs)`
+  builds every type at a minor and a major size for each direction.
+* `sweep < 180` → minor, `> 180` → major.  Never use 180: a semicircle has no
+  button.  `dir` is where the piece points (-90 up, 0 right, 90 down).
 
-Correctness is evaluated by `ZD.geo.matches(option, target, level)` from this
-data — never from pixels — and the same `ZD.geo.piecePath` draws the wall
-opening, the projectile, the option thumbnails and the game-over diagram.
+Correctness is `ZD.geo.matches(chosenId, target)` on this data - never pixels -
+and the same `ZD.geo.piecePath` draws the wall opening, the projectile, the
+button icons and the lesson diagram.  Buttons carry only a piece id; nothing in
+the page marks which one is right.
 
 ## Localisation (game-i18n)
 
@@ -135,15 +186,18 @@ and open `index.html?lan=hi` (missing keys fall back to English, then show the
 key itself). After editing the JSON, regenerate `locales/locales.js` (command in
 the header of `js/i18n.js`) so the game still runs from `file://`.
 
-There is no voice-over: learners already know the parts of a circle, so the
-game has no lessons or narration — only on-screen text. (`I18n.say` remains in
-`js/i18n.js` but nothing calls it.)
+Read-aloud uses the same keys: `I18n.say(key)` plays `assets/VO/<lang>/<key>.webm`
+when the key is listed in `assets/VO/<lang>/manifest.json`, otherwise the
+browser speaks the text.  Spoken lines: the six piece names (`piece*`, on a
+hit), the six rules (`rule*`, on the walk through the window) and the six
+reasons (`reason*`, lesson card).  To ship recorded voice-overs, record those
+18 keys and list them in the manifest.
 
 ## Audio
 
 All sound effects are synthesised in `js/core/audio.js` (`SFX` recipes), so
-no audio files are required. Toggle sound (M key / HUD button) and reduced
-motion from the pause menu (Esc / P). When the tab is hidden or the window
+no audio files are required. Toggle sound (M key / HUD button), read-aloud,
+the zombie timer and reduced motion from the pause menu (Esc / P). When the tab is hidden or the window
 loses focus, the AudioContext is suspended (`ZD.audio.setActive`, wired in
 `js/main.js`) — no ambient loop or effects play until the learner returns.
 

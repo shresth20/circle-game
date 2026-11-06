@@ -19,29 +19,23 @@ window.ZD = window.ZD || {};
 
   const ui = {
     pieceThumb,
+    answerBtns: null,
     init(root) {
       this.root = root;
       this.hud = root.querySelector('#hud');
-      this.promptEl = root.querySelector('#prompt');
       this.optionsEl = root.querySelector('#options');
       this.stampEl = root.querySelector('#stamp');
       this.bannerEl = root.querySelector('#banner');
-      this.captionEl = root.querySelector('#caption');
       this._buildHud();
+      this._buildBar();
     },
 
     /* ---------------- HUD ---------------- */
     _buildHud() {
       const h = this.hud;
       h.innerHTML = '';
-      const portrait = el('div', { class: 'portrait' });
-      const face = new ZD.Sprite({ className: 'face' });
-      face.setSheet('hero.sideIdle');
-      face.setScale(0.42);
-      face.anchorY = 0.95;
-      face.setPos(48, 158);
-      face.play({ sheet: 'hero.sideIdle', fps: 8, loop: true });
-      portrait.appendChild(face.el);
+      // profile picture (assets/images/boy/profile.png via the asset pipeline)
+      const portrait = el('div', { class: 'portrait', style: { backgroundImage: `url("${ZD.assets.imageUrl('profile')}")` } });
       this.heartsEl = el('div', { class: 'hearts' });
       const left = el('div', { class: 'hud-left' }, [portrait, this.heartsEl]);
 
@@ -76,68 +70,95 @@ window.ZD = window.ZD || {};
       setTimeout(() => h.classList.add('lost'), 300);
     },
 
-    /* ---------------- prompt + options ---------------- */
-    showPrompt(main, sub) {
-      this.promptEl.innerHTML = '';
-      this.promptEl.append(el('div', { class: 'prompt-main', text: main }));
-      if (sub) this.promptEl.append(el('div', { class: 'prompt-sub', text: sub }));
-      this.promptEl.classList.add('visible');
-      anime({ targets: this.promptEl, translateY: [-30, 0], opacity: [0, 1], duration: 450, easing: 'easeOutBack' });
-    },
-    hidePrompt() {
-      this.promptEl.classList.remove('visible');
-    },
-    /**
-     * options: [{spec, id, label, rot}], mode: shape|name|identify
-     * resolves with the chosen option (after the learner taps).
-     */
-    showOptions(options, mode) {
+    /* ---------------- answer panel ----------------
+       A side panel (question title + a column of three text pills) to the
+       right of the wall, clear of the window and the hero.  Each question
+       offers the right piece plus two others drawn at random from the
+       remaining five, in random order, so neither the set nor the position
+       gives the answer away.  Buttons carry only the piece id. */
+    _buildPanel() {
       const box = this.optionsEl;
       box.innerHTML = '';
-      box.className = 'mode-' + mode + ' count-' + options.length;
-      return new Promise((resolve) => {
-        let locked = false;
-        options.forEach((opt, i) => {
-          const b = el('button', { class: 'option', dataset: { id: opt.id } });
-          if (mode !== 'identify') b.appendChild(el('div', { class: 'opt-thumb' }, [pieceThumb(opt.spec, { size: 124, rot: opt.rot || 0 })]));
-          else b.appendChild(el('div', { class: 'opt-icon' }, [pieceThumb(opt.spec, { size: 64, rot: 0, color: 'rgba(255,255,255,0.25)', ghost: true })]));
-          if (mode !== 'name') b.appendChild(el('div', { class: 'opt-label', text: opt.label }));
-          b.addEventListener('click', () => {
-            if (locked) return;
-            locked = true;
-            ZD.audio.play('select');
-            box.querySelectorAll('.option').forEach((o) => o.classList.add('disabled'));
-            b.classList.remove('disabled');
-            b.classList.add('selected');
-            resolve(opt);
-          });
-          box.appendChild(b);
-          anime({ targets: b, translateY: [60, 0], opacity: [0, 1], duration: 420, delay: 80 * i, easing: 'easeOutBack' });
-        });
-        box.classList.add('visible');
+      box.className = 'answer-panel';
+      box.setAttribute('role', 'group');
+      box.setAttribute('aria-label', T('gridTitle'));
+      this.listEl = el('div', { class: 'answer-list' });
+      box.appendChild(this.listEl);
+      this._panelBuilt = true;
+    },
+    _fillOptions(targetId) {
+      const { shuffle } = ZD.util;
+      const others = shuffle(ZD.geo.PIECES.filter((id) => id !== targetId)).slice(0, 2);
+      this.listEl.innerHTML = '';
+      this.answerBtns = {};
+      shuffle([targetId, ...others]).forEach((id) => {
+        const label = T(ZD.geo.labelKey(id));
+        const b = el('button', { class: 'answer', dataset: { piece: id }, 'aria-label': label }, [el('span', { class: 'answer-label', text: label })]);
+        b.addEventListener('click', () => this._pick(id));
+        this.listEl.appendChild(b);
+        this.answerBtns[id] = b;
       });
     },
-    markOption(id, state) {
-      const b = this.optionsEl.querySelector(`.option[data-id="${id}"]`);
-      if (b) b.classList.add(state);
+    _pick(id) {
+      if (!this._asking) return;
+      const res = this._asking;
+      this._asking = null;
+      ZD.audio.play('select');
+      this.answerBtns[id].classList.add('selected');
+      this.optionsEl.classList.add('locked');
+      res(id);
     },
-    hideOptions() {
+    /* Show three fresh options for `targetId` and resolve with the tapped
+       piece id. */
+    ask(targetId) {
+      if (!this._panelBuilt) this._buildPanel();
       const box = this.optionsEl;
-      const items = box.querySelectorAll('.option');
-      if (!items.length) {
+      const wasVisible = box.classList.contains('visible');
+      if (this.answerBtns) anime.remove(Object.values(this.answerBtns));
+      this._fillOptions(targetId);
+      box.classList.remove('locked');
+      const pills = Object.values(this.answerBtns);
+      if (!wasVisible) box.classList.add('visible');
+      if (ZD.scene.settings.reducedMotion) {
+        box.style.transform = '';
+        box.style.opacity = '';
+      } else {
+        if (!wasVisible) {
+          anime.remove(box);
+          anime({ targets: box, translateX: [80, 0], opacity: [0, 1], duration: 300, easing: 'easeOutCubic' });
+        }
+        anime({ targets: pills, translateX: [40, 0], opacity: [0, 1], duration: 260, delay: anime.stagger(60, { start: wasVisible ? 0 : 80 }), easing: 'easeOutCubic' });
+      }
+      return new Promise((res) => (this._asking = res));
+    },
+    /* Stop accepting taps (time out / abort). */
+    endAsk() {
+      this._asking = null;
+      this.optionsEl.classList.add('locked');
+    },
+    markAnswer(id, state) {
+      const b = this.answerBtns && this.answerBtns[id];
+      if (!b) return;
+      b.classList.add(state);
+      if (state === 'reveal') anime({ targets: b, scale: [1, 1.08, 1], duration: 500, easing: 'easeOutBack' });
+    },
+    hideGrid(instant = false) {
+      const box = this.optionsEl;
+      this._asking = null;
+      if (!box.classList.contains('visible')) return Promise.resolve();
+      const pills = Object.values(this.answerBtns || {});
+      anime.remove([box, ...pills]);
+      if (instant || !this._panelBuilt || ZD.scene.settings.reducedMotion) {
         box.classList.remove('visible');
         return Promise.resolve();
       }
-      return anime({ targets: items, translateY: 60, opacity: 0, duration: 260, delay: anime.stagger(40), easing: 'easeInQuad' }).finished.then(() => {
-        box.classList.remove('visible');
-        box.innerHTML = '';
-      });
+      return anime({ targets: box, translateX: 80, opacity: 0, duration: 220, easing: 'easeInQuad' }).finished.then(() => box.classList.remove('visible'));
     },
 
     /* ---------------- stamp / banner / caption ---------------- */
-    stamp(text, kind = 'correct', hold = 1100) {
+    stamp(text, kind = 'correct', hold = 1100, { high = false } = {}) {
       const s = this.stampEl;
-      s.className = 'stamp ' + kind + ' visible';
+      s.className = 'stamp ' + kind + (high ? ' high' : '') + ' visible';
       s.innerHTML = '';
       const icon = kind === 'correct' ? '✔' : kind === 'wrong' ? '✖' : '☠';
       s.append(el('span', { class: 'stamp-icon', text: icon }), el('span', { text }));
@@ -146,30 +167,74 @@ window.ZD = window.ZD || {};
         ZD.util.wait(hold).then(() => anime({ targets: s, opacity: 0, scale: 0.9, duration: 220, easing: 'easeInQuad' }).finished.then(() => s.classList.remove('visible')))
       );
     },
+    /* ---------------- message bar ----------------
+       Every in-play line (wall titles, the question, rule reviews, the intro
+       alarm) appears in ONE bar at the bottom: assets/images/banner.png,
+       stretched as a 9-slice (left cap = portrait socket, right cap =
+       stripes; caps measured by tools/build-assets.py build_banner).  It sits
+       right of the hero and under the answer panel.  The hero's face looks
+       out of the socket. */
+    _buildBar() {
+      const b = this.bannerEl;
+      const art = ZD.assets.image('banner');
+      const H = 160;
+      const k = H / art.h;
+      const capL = Math.round(art.capL * k);
+      const capR = Math.round(art.capR * k);
+      b.className = 'banner msgbar';
+      b.innerHTML = '';
+      b.style.height = H + 'px';
+      b.style.borderWidth = `0 ${capR}px 0 ${capL}px`;
+      b.style.borderImage = `url("${ZD.assets.imageUrl('banner')}") 0 ${art.capR} 0 ${art.capL} fill / 0 ${capR}px 0 ${capL}px stretch`;
+      // portrait in the socket (positioned in border-box px: the left cap is a border)
+      const r = art.socket.r * k;
+      const face = el('div', { class: 'msgbar-face', style: { left: art.socket.x * k - r - capL + 'px', top: art.socket.y * k - r + 'px', width: r * 2 + 'px', height: r * 2 + 'px' } });
+      face.style.backgroundImage = `url("${ZD.assets.imageUrl('profile')}")`;
+      this.barText = el('div', { class: 'msgbar-text' });
+      b.append(face, this.barText);
+    },
+    /* Show a message in the bar.  kind: info | title | ask | good | alert. */
     showBanner(title, text, kind = 'info') {
       const b = this.bannerEl;
-      b.className = 'banner ' + kind + ' visible';
-      b.innerHTML = '';
-      b.append(el('div', { class: 'banner-title', text: title }));
-      if (text) b.append(el('div', { class: 'banner-text', text }));
-      anime({ targets: b, translateY: [40, 0], opacity: [0, 1], duration: 420, easing: 'easeOutCubic' });
+      const t = this.barText;
+      const wasVisible = b.classList.contains('visible') && !this._barHiding;
+      this._barHiding = false;
+      b.className = 'banner msgbar ' + kind + ' visible';
+      t.innerHTML = '';
+      if (title) t.append(el('div', { class: 'banner-title', text: title }));
+      if (text) t.append(el('div', { class: 'banner-text', text }));
+      anime.remove([b, t]);
+      const still = ZD.scene.settings.reducedMotion;
+      if (wasVisible) {
+        // already up: just swap the words
+        b.style.opacity = 1;
+        b.style.transform = '';
+        if (!still) anime({ targets: t, opacity: [0, 1], translateX: [16, 0], duration: 220, easing: 'easeOutCubic' });
+      } else if (still) {
+        b.style.opacity = 1;
+        b.style.transform = '';
+      } else {
+        anime({ targets: b, translateY: [60, 0], opacity: [0, 1], duration: 320, easing: 'easeOutCubic' });
+        anime({ targets: t, opacity: [0, 1], duration: 260, delay: 90, easing: 'easeOutCubic' });
+      }
     },
     hideBanner() {
       const b = this.bannerEl;
-      if (!b.classList.contains('visible')) return Promise.resolve();
-      return anime({ targets: b, opacity: 0, translateY: 20, duration: 220, easing: 'easeInQuad' }).finished.then(() => b.classList.remove('visible'));
+      if (!b.classList.contains('visible') || this._barHiding) return Promise.resolve();
+      this._barHiding = true;
+      anime.remove([b, this.barText]);
+      const done = () => {
+        if (!this._barHiding) return; // a new message arrived meanwhile
+        this._barHiding = false;
+        b.classList.remove('visible');
+      };
+      if (ZD.scene.settings.reducedMotion) return Promise.resolve(done());
+      return anime({ targets: b, opacity: 0, translateY: 40, duration: 200, easing: 'easeInQuad' }).finished.then(done);
     },
-    /* On-screen caption by i18n key (text only, no narration). */
+    /* Caption by i18n key -> the message bar ('' hides it). */
     caption(key, { big = false } = {}) {
-      const c = this.captionEl;
-      c.innerHTML = '';
-      if (!key) {
-        c.classList.remove('visible');
-        return;
-      }
-      c.className = 'caption visible' + (big ? ' big' : '');
-      c.appendChild(el('span', { text: T(key) }));
-      anime({ targets: c, opacity: [0, 1], translateY: [16, 0], duration: 380, easing: 'easeOutCubic' });
+      if (!key) return this.hideBanner();
+      return this.showBanner(big ? T(key) : null, big ? null : T(key), big ? 'alert' : 'info');
     },
 
     /* ---------------- generic overlay panel ---------------- */
@@ -237,6 +302,8 @@ window.ZD = window.ZD || {};
           ZD.audio.setMuted(!v);
           this._syncMute();
         }),
+        toggle(T('pauseVoice'), () => ZD.audio.voiceEnabled, (v) => ZD.audio.setVoice(v)),
+        toggle(T('pauseTimer'), () => ZD.game.timerOn, (v) => ZD.game.setTimerOn(v)),
         toggle(T('pauseMotion'), () => ZD.scene.settings.reducedMotion, (v) => ZD.scene.setReducedMotion(v)),
       ]);
       return this.panel({

@@ -1,6 +1,7 @@
-/* Procedural sound effects (no voice-over).
-   Everything is synthesised with WebAudio, so the game needs no audio files
-   and works offline. Replace any effect by editing the recipe in SFX below.
+/* Procedural sound effects + read-aloud.
+   Every effect is synthesised with WebAudio, so the game needs no audio files
+   and works offline.  say() is the read-aloud fallback used by I18n.say when
+   no recorded clip exists (browser speech, in the current language). Replace any effect by editing the recipe in SFX below.
    Audio is silenced while the page is inactive (tab hidden / window blurred):
    see setActive(), driven from main.js. */
 window.ZD = window.ZD || {};
@@ -12,6 +13,7 @@ window.ZD = window.ZD || {};
   let ambientNodes = null;
   const state = {
     muted: ZD.prefs.get('muted', false),
+    voice: ZD.prefs.get('voice', true),
     active: !document.hidden,
     ready: false,
   };
@@ -197,7 +199,47 @@ window.ZD = window.ZD || {};
       tone({ type: 'sine', freq: 1100, to: 1500, dur: 0.12, vol: 0.14, delay: 0.09 });
     },
     drag: () => tone({ type: 'sine', freq: 300 + Math.random() * 200, dur: 0.03, vol: 0.05 }),
+    /* zombie timer: a soft heartbeat in the last seconds */
+    heartbeat: () => {
+      tone({ type: 'sine', freq: 70, to: 45, dur: 0.14, vol: 0.32 });
+      tone({ type: 'sine', freq: 62, to: 40, dur: 0.16, vol: 0.24, delay: 0.2 });
+    },
+    /* zombie hands scraping up the wall */
+    scrape: () => noise({ dur: 0.22, vol: 0.09, filter: 'bandpass', freq: 900, to: 500, q: 3, attack: 0.03 }),
+    /* glass reseals with a new opening */
+    reform: () => {
+      [880, 1175, 1568].forEach((f, i) => tone({ type: 'sine', freq: f, dur: 0.16, vol: 0.1, delay: i * 0.06 }));
+      noise({ dur: 0.35, vol: 0.08, filter: 'highpass', freq: 4000, attack: 0.05 });
+    },
+    /* a piece hits the zombie (not the final knockout) */
+    hit: () => {
+      tone({ type: 'square', freq: 220, to: 90, dur: 0.16, vol: 0.2 });
+      noise({ dur: 0.12, vol: 0.25, filter: 'lowpass', freq: 1400 });
+      tone({ type: 'triangle', freq: 880, to: 1320, dur: 0.12, vol: 0.12, delay: 0.08 });
+    },
   };
+
+  /* ---- read-aloud (browser speech) ------------------------------------- */
+  const speech = window.speechSynthesis || null;
+  function say(text) {
+    if (!speech || !text || state.muted || !state.active || !state.voice) return;
+    try {
+      speech.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = (window.I18n && I18n.langCode) || 'en-IN';
+      u.rate = 0.95;
+      speech.speak(u);
+    } catch (e) {
+      /* speech not available - captions are always on screen */
+    }
+  }
+  function stopSpeech() {
+    try {
+      speech && speech.cancel();
+    } catch (e) {
+      /* ignore */
+    }
+  }
 
   function ambient(on) {
     if (!ensure()) return;
@@ -268,15 +310,27 @@ window.ZD = window.ZD || {};
       const fx = SFX[name];
       if (fx) fx();
     },
+    get voiceEnabled() {
+      return state.voice;
+    },
+    setVoice(on) {
+      state.voice = !!on;
+      ZD.prefs.set('voice', state.voice);
+      if (!on) stopSpeech();
+    },
+    say,
+    stopSpeech,
     setMuted(m) {
       state.muted = m;
       ZD.prefs.set('muted', m);
+      if (m) stopSpeech();
       if (master) master.gain.setTargetAtTime(m ? 0 : 0.9, now(), 0.02);
     },
     /* Page focus: inactive -> suspend the whole audio graph (ambient loop
        included) and drop new effects; active -> resume where it left off. */
     setActive(on) {
       state.active = on;
+      if (!on) stopSpeech();
       if (!ctx) return;
       if (on) {
         if (ctx.state === 'suspended') ctx.resume().catch(() => {});

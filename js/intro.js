@@ -10,25 +10,46 @@ window.ZD = window.ZD || {};
   const D = (ms) => ZD.scene.D(ms);
 
   const intro = {
-    /* Title: logo over the side scene, resolves on tap (unlocks audio). */
+    /* Welcome screen: the road picture (full-picture/image copy 5.png) as
+       background, the big logo in the middle and a round PLAY button.  Resolves on tap (which also unlocks audio). */
     async title() {
       const side = ZD.scene.side;
       ZD.scene.camera.cut('side');
       side.idle();
       side.setTarget(null);
       ZD.ui.showHud(false);
+      const A = ZD.assets;
+      const still = ZD.scene.settings.reducedMotion;
       const ov = document.getElementById('title');
       ov.innerHTML = '';
-      ov.className = 'overlay title visible';
-      const logo = el('div', { class: 'logo' }, [
-        el('div', { class: 'logo-top', text: ZD.T('appTitle').split(' ')[0] }),
-        el('div', { class: 'logo-bottom', text: ZD.T('appTitle').split(' ').slice(1).join(' ') }),
-        el('div', { class: 'logo-sub', text: T('appSubtitle') }),
-      ]);
-      const btn = el('button', { class: 'btn primary huge', text: T('appTap') });
+      ov.className = 'overlay title welcome visible';
+      // first time: the loading screen (#loader, same layout) is still on top
+      const loader = document.getElementById('loader');
+      const logoArt = A.image('welcomeLogo');
+      const logo = el('div', { class: 'welcome-logo', role: 'img', 'aria-label': T('appTitle'), style: { backgroundImage: `url("${A.imageUrl('welcomeLogo')}")`, aspectRatio: `${logoArt.w} / ${logoArt.h}` } });
+      // play button art (assets/images/image copy.png via build_start_button)
+      // with pulse rings radiating from its disc; the inner span breathes,
+      // the button itself pops in / presses
+      // .play-art takes hover / press, its inner .play-img does the "tap me" beat (CSS)
+      const art = el('span', { class: 'play-art' }, [el('span', { class: 'play-img', style: { backgroundImage: `url("${A.imageUrl('startButton')}")` } })]);
+      const btn = el('button', { class: 'play-btn', 'aria-label': T('btnPlay') }, [el('span', { class: 'play-glow' }), el('span', { class: 'play-pulse' }), el('span', { class: 'play-pulse late' }), art]);
       ov.append(logo, btn);
-      anime({ targets: logo, translateY: [-60, 0], opacity: [0, 1], duration: 900, easing: 'easeOutElastic(1, .7)' });
-      anime({ targets: btn, opacity: [0, 1], translateY: [30, 0], duration: 600, delay: 500, easing: 'easeOutCubic' });
+      const loops = [];
+      if (loader) {
+        // swap: the logo is already showing; the loading bar gives way to the button
+        logo.style.opacity = 1;
+        const slot = loader.querySelector('.welcome-slot');
+        if (still) loader.remove();
+        else await anime({ targets: slot, opacity: 0, scale: 0.92, duration: 220, easing: 'easeInQuad' }).finished.then(() => loader.remove());
+      }
+      if (still) {
+        [logo, btn].forEach((n) => (n.style.opacity = 1));
+      } else {
+        if (!loader) anime({ targets: logo, translateY: [-80, 0], scale: [0.85, 1], opacity: [0, 1], duration: 900, easing: 'easeOutElastic(1, .7)' });
+        anime({ targets: btn, scale: [0.3, 1], opacity: [0, 1], duration: 520, delay: loader ? 0 : 550, easing: 'easeOutBack' });
+        // idle: the logo floats, the button breathes (transform only)
+        loops.push(anime({ targets: logo, translateY: [0, -10], duration: 1800, delay: loader ? 0 : 950, direction: 'alternate', loop: true, easing: 'easeInOutSine' }));
+      }
       await new Promise((res) => {
         const go = () => {
           ZD.audio.unlock();
@@ -38,8 +59,13 @@ window.ZD = window.ZD || {};
         };
         btn.addEventListener('click', go, { once: true });
       });
-      await anime({ targets: [logo, btn], opacity: 0, duration: 300, easing: 'linear' }).finished;
-      ov.classList.remove('visible');
+      loops.forEach((a) => a.pause());
+      anime.remove([logo, btn, art]);
+      if (!still) {
+        anime({ targets: btn, scale: [1, 0.9], duration: 120, easing: 'easeInQuad' });
+        await anime({ targets: [logo, btn], opacity: 0, duration: 300, delay: 80, easing: 'easeInQuad' }).finished;
+      }
+      ov.classList.remove('visible', 'welcome');
       ov.innerHTML = '';
     },
 
@@ -135,17 +161,17 @@ window.ZD = window.ZD || {};
         const map = el('div', { class: 'mission-map' });
         map.style.backgroundImage = `url("${ZD.assets.imageUrl('roadPersp')}")`;
         const pathEl = el('div', { class: 'map-path' });
-        const items = [1, 2, 3].map((n) => el('div', { class: 'map-item' }, [el('div', { class: 'map-wall', style: { backgroundImage: `url("${ZD.assets.wallUrl('front')}")` } }), el('span', { text: T('intro3Wall', { n }) })]));
+        const nWalls = ZD.MISSIONS[0].rounds.length;
+        const items = Array.from({ length: nWalls }, (_, i) => i + 1).map((n) => el('div', { class: 'map-item' }, [el('div', { class: 'map-wall', style: { backgroundImage: `url("${ZD.assets.wallUrl('front')}")` } }), el('span', { text: T('intro3Wall', { n }) })]));
         const safe = el('div', { class: 'map-item safe' }, [el('div', { class: 'map-gate' }, [el('span', { text: '⌂' })]), el('span', { text: T('intro3Safe') })]);
-        const chain = el('div', { class: 'map-chain' });
+        const chain = el('div', { class: 'map-chain' + (nWalls > 3 ? ' many' : '') });
         items.forEach((it, i) => {
           chain.appendChild(it);
           chain.appendChild(el('div', { class: 'map-arrow', text: '➜' }));
         });
         chain.appendChild(safe);
         const startBtn = el('button', { class: 'btn primary huge start', text: T('btnStartMission') });
-        const vo = el('div', { class: 'map-caption', text: T('intro3Vo') });
-        map.append(pathEl, chain, vo, startBtn);
+        map.append(pathEl, chain, startBtn);
         ov.appendChild(map);
         ov.classList.remove('pass');
         anime({ targets: map, opacity: [0, 1], duration: D(500), easing: 'linear' });

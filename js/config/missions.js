@@ -1,116 +1,99 @@
-/* Mission / wall / challenge configuration.
+/* Mission configuration (data only - no code changes needed to tune it).
    ------------------------------------------------------------------
-   A mission = 3 walls.  A wall = a concept focus + a pool of challenges;
-   the game picks a different challenge from the pool on every attempt.
+   There are six pieces:
+                 ARC          SECTOR          SEGMENT
+       MINOR   minor arc    minor sector    minor segment
+       MAJOR   major arc    major sector    major segment
+   Each question shows three of them as answer buttons: the right piece
+   plus two others at random (see ZD.ui.ask).
 
-   piece spec:  P(type, start, sweep, rot)
-     type   'arc' | 'sector' | 'segment' | 'chord'
-     start  start angle (degrees, clockwise from +x)
-     sweep  size of the piece in degrees (<180 minor, >180 major; never 180)
-     rot    extra rotation applied only to how the OPTION is displayed, so
-            learners must recognise the shape in a different orientation.
+   One mission = 6 walls = 6 questions, one question per wall.  At the start
+   of every play the six pieces are shuffled and dealt one per wall, so each
+   piece is asked exactly once, in a random order.
 
-   challenge:
-     mode     'shape'    - options show shape + label, match the opening
-              'name'     - prompt names a piece, options show shapes only
-              'identify' - options are names only, learner names the opening
-     target   the piece missing from the wall
-     options  3-4 piece specs; exactly one must match target (type + size,
-              or type only when the wall's level is 'basic')
+   mission : { id, titleKey, hearts, rounds, openings }
+     hearts    last the whole mission; losing them all replays that wall
+     rounds    one entry per wall, in play order: { tier, timer }
+                 tier   which opening pool the wall draws from
+                 timer  seconds before the zombie climbs through, or null
+                        (no timer - the zombie only paces).  Learners can
+                        switch the timer off in the pause menu.
+     openings  { tier: [O(...), ...] } - each tier must have at least 2
+               openings for EVERY piece: after a miss the wall asks the
+               same piece again in a different opening.
 
-   Add missions by appending to ZD.MISSIONS - no code changes needed. */
+   O(type, sweep, dir)  one opening
+     type   'arc' | 'sector' | 'segment'
+     sweep  size in degrees: < 180 minor, > 180 major.  NEVER 180 - a
+            semicircle has no button among the six.
+     dir    direction the piece points (its middle), degrees clockwise from
+            "right": -90 up, 0 right, 90 down, 180 left.
+
+   Difficulty ladder (LXD feedback):
+     start   very clear sizes (~90 vs ~270), upright directions
+     middle  rotated directions, medium sizes
+     hard    sizes close to half (~150 vs ~210) */
 window.ZD = window.ZD || {};
 
 (function () {
-  const P = (type, start, sweep, rot = 0) => ({ type, start, sweep, rot });
-  /* complementary piece of the same type (minor <-> major) */
-  const C = (p, rot = 0) => ({ type: p.type, start: p.start + p.sweep, sweep: 360 - p.sweep, rot });
+  const O = (type, sweep, dir) => ({ type, sweep, start: dir - sweep / 2 });
+  /* every type at a minor and a major size, once per direction */
+  const tier = (minor, major, dirs) => {
+    const out = [];
+    dirs.forEach((dir, i) => ['arc', 'sector', 'segment'].forEach((type, j) => {
+      out.push(O(type, minor[(i + j) % minor.length], dir));
+      out.push(O(type, major[(i + j) % major.length], dir + 180));
+    }));
+    return out;
+  };
 
   ZD.MISSIONS = [
     {
       id: 'm1',
-      title: 'The Last Safe Zone',
+      titleKey: 'mission1',
       hearts: 3,
-      walls: [
-        {
-          id: 'w1',
-          titleKey: 'wallIntro1',
-          level: 'basic', // labels: ARC / SECTOR / SEGMENT
-          challenges: [
-            { mode: 'shape', target: P('sector', -35, 100), options: [P('arc', -35, 100), P('sector', -35, 100), P('segment', -35, 100)] },
-            { mode: 'shape', target: P('segment', 200, 120), options: [P('arc', 200, 120), P('sector', 200, 120), P('segment', 200, 120)] },
-            { mode: 'shape', target: P('arc', 250, 110), options: [P('arc', 250, 110), P('sector', 250, 110), P('segment', 250, 110)] },
-            { mode: 'shape', target: P('sector', 120, 90), options: [P('arc', 120, 90), P('sector', 120, 90), P('segment', 120, 90)] },
-            { mode: 'shape', target: P('segment', -20, 100), options: [P('arc', -20, 100), P('sector', -20, 100), P('segment', -20, 100)] },
-          ],
-        },
-        {
-          id: 'w2',
-          titleKey: 'wallIntro2',
-          level: 'full',
-          challenges: [
-            { mode: 'shape', target: P('sector', 40, 240), options: [C(P('sector', 40, 240)), P('sector', 40, 240), P('arc', 40, 240)] },
-            { mode: 'shape', target: P('arc', 200, 130), options: [P('arc', 200, 130), C(P('arc', 200, 130)), P('sector', 200, 130)] },
-            { mode: 'name', target: P('sector', 150, 110), options: [P('sector', 150, 110), C(P('sector', 150, 110)), P('segment', 150, 110)] },
-            { mode: 'shape', target: P('arc', -70, 230), options: [P('arc', -70, 230), C(P('arc', -70, 230)), P('sector', -70, 230)] },
-            { mode: 'identify', target: P('sector', 100, 280), options: [P('sector', 100, 280), C(P('sector', 100, 280)), P('arc', 100, 280)] },
-            { mode: 'name', target: P('arc', 20, 250), options: [P('arc', 20, 250), C(P('arc', 20, 250)), P('sector', 20, 250)] },
-          ],
-        },
-        {
-          id: 'w3',
-          titleKey: 'wallIntro3',
-          level: 'full',
-          challenges: [
-            { mode: 'shape', target: P('segment', 30, 120), options: [P('segment', 30, 120, 40), P('sector', 30, 120, -30), P('chord', 30, 120, 20), P('arc', 30, 120, 60)] },
-            { mode: 'shape', target: P('segment', 190, 240), options: [P('segment', 190, 240, 30), C(P('segment', 190, 240), -45), P('sector', 190, 240, 20), P('chord', 190, 240)] },
-            { mode: 'name', target: P('segment', -40, 250), options: [P('segment', -40, 250, 50), C(P('segment', -40, 250), 30), P('sector', -40, 250, -20), P('arc', -40, 250, 40)] },
-            { mode: 'identify', target: P('segment', 140, 100), options: [P('segment', 140, 100), P('sector', 140, 100), P('arc', 140, 100), P('chord', 140, 100)] },
-            { mode: 'shape', target: P('sector', 230, 140), options: [P('sector', 230, 140, 70), P('segment', 230, 140, -50), C(P('sector', 230, 140), 30), P('chord', 230, 140, 90)] },
-            { mode: 'identify', target: P('segment', 60, 230), options: [P('segment', 60, 230), C(P('segment', 60, 230)), P('sector', 60, 230), P('chord', 60, 230)] },
-          ],
-        },
+      rounds: [
+        { tier: 'start', timer: null },
+        { tier: 'start', timer: 20 },
+        { tier: 'middle', timer: 15 },
+        { tier: 'middle', timer: 14 },
+        { tier: 'hard', timer: 13 },
+        { tier: 'hard', timer: 12 },
       ],
-    },
-    {
-      id: 'm2',
-      title: 'Night Patrol',
-      hearts: 3,
-      walls: [
-        {
-          id: 'w1',
-          titleKey: 'wallIntro2',
-          level: 'full',
-          challenges: [
-            { mode: 'identify', target: P('arc', 300, 120), options: [P('arc', 300, 120), C(P('arc', 300, 120)), P('sector', 300, 120), P('segment', 300, 120)] },
-            { mode: 'shape', target: P('sector', 15, 70), options: [P('sector', 15, 70, 90), P('segment', 15, 70, -60), C(P('sector', 15, 70), 45), P('arc', 15, 70, 30)] },
-            { mode: 'name', target: P('segment', 110, 210), options: [P('segment', 110, 210, 80), C(P('segment', 110, 210), -30), P('sector', 110, 210, 20), P('chord', 110, 210, 10)] },
-          ],
-        },
-        {
-          id: 'w2',
-          titleKey: 'wallIntro3',
-          level: 'full',
-          challenges: [
-            { mode: 'identify', target: P('sector', 200, 260), options: [P('sector', 200, 260), C(P('sector', 200, 260)), P('segment', 200, 260), P('arc', 200, 260)] },
-            { mode: 'shape', target: P('arc', 75, 220), options: [P('arc', 75, 220, 120), C(P('arc', 75, 220), 45), P('sector', 75, 220, 10), P('segment', 75, 220, -40)] },
-            { mode: 'name', target: P('segment', -10, 130), options: [P('segment', -10, 130, 100), C(P('segment', -10, 130), 20), P('sector', -10, 130, 50), P('chord', -10, 130, 45)] },
-          ],
-        },
-        {
-          id: 'w3',
-          titleKey: 'wallIntro3',
-          level: 'full',
-          challenges: [
-            { mode: 'identify', target: P('segment', 240, 110), options: [P('segment', 240, 110), P('sector', 240, 110), C(P('segment', 240, 110)), P('chord', 240, 110)] },
-            { mode: 'name', target: P('sector', 320, 290), options: [P('sector', 320, 290, 60), C(P('sector', 320, 290), -20), P('segment', 320, 290, 30), P('arc', 320, 290, 90)] },
-            { mode: 'shape', target: P('arc', 160, 95), options: [P('arc', 160, 95, 180), C(P('arc', 160, 95), 30), P('segment', 160, 95, 45), P('chord', 160, 95, -30)] },
-          ],
-        },
-      ],
+      openings: {
+        start: tier([90], [270], [-90, 90, 0, 180]),
+        middle: tier([100, 115, 125], [235, 250, 260], [-45, 135, 30, 220, -120]),
+        hard: tier([145, 150, 155], [205, 210, 215], [50, -130, 170, -10]),
+      },
     },
   ];
 
-  /* Score rules (first-try correct, after 1 miss, after 2 misses). */
-  ZD.SCORING = { byMisses: [100, 60, 30], min: 10 };
+  /* Points per wall knocked out (no carry-over penalty). */
+  ZD.SCORING = { perHit: 100 };
+
+  /* Authoring guard: report openings that break the rules above. */
+  const bad = [];
+  const PIECES = ['minor-arc', 'minor-sector', 'minor-segment', 'major-arc', 'major-sector', 'major-segment'];
+  const idOf = (o) => {
+    const s = ((o.sweep % 360) + 360) % 360;
+    return `${s < 180 ? 'minor' : 'major'}-${o.type}`;
+  };
+  ZD.MISSIONS.forEach((m) => {
+    if (m.rounds.length !== PIECES.length) bad.push(`${m.id}: ${m.rounds.length} rounds - need one per piece (${PIECES.length})`);
+    Object.entries(m.openings).forEach(([name, list]) => {
+      list.forEach((o, i) => {
+        const s = ((o.sweep % 360) + 360) % 360;
+        if (!['arc', 'sector', 'segment'].includes(o.type)) bad.push(`${m.id}.${name}#${i}: unknown type ${o.type}`);
+        if (s < 20 || s > 340 || Math.abs(s - 180) < 15) bad.push(`${m.id}.${name}#${i}: sweep ${o.sweep} is too close to 0/180/360`);
+      });
+      PIECES.forEach((id) => {
+        const n = list.filter((o) => idOf(o) === id).length;
+        if (n < 2) bad.push(`${m.id}.${name}: only ${n} opening(s) for ${id} (need 2+)`);
+      });
+    });
+    m.rounds.forEach((r, i) => {
+      if (!m.openings[r.tier]) bad.push(`${m.id} round ${i + 1}: unknown tier ${r.tier}`);
+    });
+  });
+  if (bad.length) console.warn('[missions] config problems:\n' + bad.join('\n'));
 })();

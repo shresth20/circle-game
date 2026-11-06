@@ -140,6 +140,81 @@ def make_tileable(arr, blend=140):
     return np.clip(out, 0, 255).astype(np.uint8)
 
 
+def key_black(arr, lo=3, hi=16, min_area=150):
+    """Turn a flat black backdrop into alpha. Only dark regions that touch the
+    border (or are big enclosed gaps, e.g. between tower braces) are keyed, so
+    dark outlines inside the art stay opaque; edges get a soft alpha ramp."""
+    m = arr[:, :, :3].max(axis=2).astype(np.float32)
+    dark = m < hi
+    lab, n = ndimage.label(dark)
+    if n == 0:
+        return arr
+    sizes = ndimage.sum(dark, lab, range(1, n + 1))
+    border = set(np.unique(np.concatenate([lab[0], lab[-1], lab[:, 0], lab[:, -1]]))) - {0}
+    keep = [i + 1 for i, s in enumerate(sizes) if (i + 1) in border or s >= min_area]
+    bg = np.isin(lab, keep)
+    a = np.where(bg, np.clip((m - lo) / (hi - lo), 0, 1) * 255, 255)
+    arr[:, :, 3] = np.minimum(arr[:, :, 3], a).astype(np.uint8)
+    return arr
+
+
+def remove_sun(arr):
+    """Erase the sun disc baked into the skyline art (the largest warm-coloured
+    blob) so the runtime can draw one sun of its own instead of one per tile.
+    Lit windows are small separate blobs and are kept."""
+    r, g, b, a = (arr[:, :, i].astype(np.int32) for i in range(4))
+    warm = (a > 40) & (r > 180) & (b < 120) & (r - b > 90)
+    lab, n = ndimage.label(warm)
+    if n == 0:
+        return arr
+    sizes = ndimage.sum(warm, lab, range(1, n + 1))
+    sun = lab == (int(np.argmax(sizes)) + 1)
+    # grow over the anti-aliased rim, but only onto warm-ish pixels
+    rim = ndimage.binary_dilation(sun, iterations=4) & (r - b > 30)
+    arr[:, :, 3] = np.where(sun | rim, 0, arr[:, :, 3]).astype(np.uint8)
+    return arr
+
+
+# separate clouds cut from the cloud-bank art (x0, y0, x1, y1); the runtime
+# scatters a few of them instead of tiling the whole bank
+CLOUD_BOXES = [(1135, 32, 1564, 121), (3, 58, 516, 180), (498, 185, 830, 257), (950, 204, 1340, 273)]
+
+
+def build_clouds():
+    arr = stretch_alpha(load("bg/ChatGPT Image Nov 5, 2026, 04_35_09 PM-5.png"), lo=20)
+    solid = ndimage.binary_closing(arr[:, :, 3] > 60, iterations=3)
+    lab, _ = ndimage.label(solid)
+    for i, (x0, y0, x1, y1) in enumerate(CLOUD_BOXES, 1):
+        # keep only the blob that owns this box (neighbours overlap the boxes)
+        ids, counts = np.unique(lab[y0:y1, x0:x1][solid[y0:y1, x0:x1]], return_counts=True)
+        own = ndimage.binary_dilation(lab == ids[np.argmax(counts)], iterations=3)
+        part = arr.copy()
+        part[:, :, 3] = np.where(own, part[:, :, 3], 0)
+        part = part[max(0, y0 - 4):y1 + 4, max(0, x0 - 4):x1 + 4]
+        bx0, by0, bx1, by1 = bbox(part)
+        part = part[by0:by1, bx0:bx1]
+        MANIFEST["images"][f"cloud{i}"] = {"src": save(part, f"props/cloud-{i}.webp", 86), "w": part.shape[1], "h": part.shape[0]}
+
+
+def build_dry_trees():
+    """Split bg/trees.png (two rows of dry trees on grass tufts) into single
+    props dryTree1..N, ordered row by row, left to right."""
+    arr = stretch_alpha(load("bg/trees.png"), lo=20)
+    solid = ndimage.binary_closing(arr[:, :, 3] > 60, iterations=6)
+    lab, n = ndimage.label(solid)
+    sizes = ndimage.sum(solid, lab, range(1, n + 1))
+    boxes = ndimage.find_objects(lab)
+    trees = [i + 1 for i, sz in enumerate(sizes) if sz > 12000]
+    trees.sort(key=lambda i: (boxes[i - 1][0].start > arr.shape[0] // 2, boxes[i - 1][1].start))
+    for k, i in enumerate(trees, 1):
+        own = ndimage.binary_dilation(lab == i, iterations=3)
+        part = arr.copy()
+        part[:, :, 3] = np.where(own, part[:, :, 3], 0)
+        x0, y0, x1, y1 = bbox(part)
+        part = part[y0:y1, x0:x1]
+        MANIFEST["images"][f"dryTree{k}"] = {"src": save(part, f"props/dry-tree-{k}.webp", 86), "w": part.shape[1], "h": part.shape[0]}
+
+
 def interior_hole(arr, thresh=40):
     """Find the transparent region fully enclosed by the opaque wall."""
     t = arr[:, :, 3] < thresh
@@ -172,8 +247,9 @@ def build_layers():
     sky = make_tileable(load("bg/ChatGPT Image Nov 5, 2026, 04_35_00 PM-1.png"), blend=360)
     MANIFEST["images"]["sky"] = {"src": save_opaque(sky, "bg/sky.webp", 80), "w": sky.shape[1], "h": sky.shape[0]}
 
-    def alpha_layer(key, rel, out, crop=None, lo=20, tile=False):
-        arr = stretch_alpha(load(rel), lo=lo)
+    def alpha_layer(key, rel, out, crop=None, lo=20, tile=False, black_bg=False, post=None):
+        arr = load(rel)
+        arr = key_black(arr) if black_bg else stretch_alpha(arr, lo=lo)
         x0, y0 = 0, 0
         if crop == "auto":
             x0, y0, x1, y1 = bbox(arr)
@@ -183,17 +259,35 @@ def build_layers():
             arr = arr[y0:y1, x0:x1]
         if tile:
             arr = make_tileable(arr, blend=tile if isinstance(tile, int) and not isinstance(tile, bool) else 140)
+        if post:
+            arr = post(arr)
         MANIFEST["images"][key] = {"src": save(arr, out, 86), "w": arr.shape[1], "h": arr.shape[0], "ox": x0, "oy": y0}
 
     # tile=0 → trim only; these layers are mirror-tiled by the runtime
-    alpha_layer("clouds", "bg/ChatGPT Image Nov 5, 2026, 04_35_09 PM-5.png", "bg/clouds.webp", crop=(0, 0, 1870, 420), tile=0)
+    build_clouds()
+    build_dry_trees()
     alpha_layer("haze", "bg/ChatGPT Image Nov 5, 2026, 04_35_03 PM-2.png", "bg/haze.webp", crop=(0, 280, 1870, 841), lo=28, tile=0)
     alpha_layer("mountains", "bg/ChatGPT Image Nov 5, 2026, 04_35_05 PM-3.png", "bg/mountains.webp", crop=(0, 400, 1870, 841), tile=0)
-    alpha_layer("skyline", "bg/ChatGPT Image Nov 5, 2026, 04_35_07 PM-4.png", "bg/skyline.webp", crop=(0, 330, 1870, 640), tile=0)
-    alpha_layer("tower", "bg/Purple Watchtower with Golden Spotlight.png", "bg/tower.webp", crop="auto")
+    # bg/image.png: the skyline repainted solid down to the bottom edge, so it
+    # never shows a cut-off base (the runtime pins source row 640, the old
+    # crop bottom, to the same screen y as before)
+    alpha_layer("skyline", "bg/image.png", "bg/skyline.webp", crop=(0, 280, 1870, 841), tile=0, post=remove_sun)
+    # side-view watchtower: the tall lattice tower (bg/image copy.png), on black
+    alpha_layer("tower", "bg/image copy.png", "bg/tower.webp", crop="auto", black_bg=True)
     alpha_layer("tree", "bg/Isolated Sunset Tree and Grass.png", "bg/tree.webp", crop="auto")
-    alpha_layer("fenceFront", "bg/fence_front_view_25x9.png", "bg/fence-front.webp", crop=(0, 505, 2500, 880), tile=0)
-    alpha_layer("landRoad", "land/land_road_25x9.png", "bg/land-road.webp", crop=(0, 530, 2500, 900), tile=0)
+    # crop from the first post's centre to the last post's centre: mirror-tiled,
+    # neighbouring tiles share one post and the spacing stays even (~390px)
+    alpha_layer("fenceFront", "bg/fence_front_view_25x9.png", "bg/fence-front.webp", crop=(81, 505, 2420, 880), tile=0)
+    alpha_layer("safeZone", "land/safe zone.png", "bg/safe-zone.webp", crop="auto")
+
+    # side-view road: brick walkway with a visible top surface (rows 230-324)
+    # and front face (to 500); trimmed to its content, mirror-tiled at runtime
+    road = stretch_alpha(load("land/image copy.png"), lo=20)[226:504]
+    # a lower road: keep the top surface, the cap row and the first 2 brick
+    # rows (to the mortar line at 203), then re-attach the dark bottom edge
+    # (mortar + shadow, rows 268-276) so it still ends cleanly
+    road = np.concatenate([road[:203], road[268:276]], axis=0)
+    MANIFEST["images"]["roadTop"] = {"src": save(road, "bg/road-top.webp", 86), "w": road.shape[1], "h": road.shape[0]}
 
     for i in range(1, 8):
         arr = stretch_alpha(load(f"land/grass_0{i}.png"), lo=12)
@@ -204,12 +298,88 @@ def build_layers():
 
     build_dirt()
     build_front_road()
+    build_banner()
+    build_profile()
+    build_welcome()
+    build_start_button()
 
     # Perspective road (used by the mission-map intro scene) and the defeat illustration.
     road = load("full-picture/image copy 5.png")
     MANIFEST["images"]["roadPersp"] = {"src": save_opaque(road, "bg/road-persp.webp", 80), "w": road.shape[1], "h": road.shape[0]}
     go = load("full-picture/image copy.png")[108:882, 50:1622]
     MANIFEST["images"]["gameOver"] = {"src": save_opaque(go, "bg/game-over.webp", 82), "w": go.shape[1], "h": go.shape[0]}
+
+
+# Bottom message bar (assets/images/banner.png): the purple plate with a round
+# socket on the left.  Cropped to its content, faint fringe removed, the noisy
+# socket interior replaced by a dark disc (the hero portrait sits in it), and
+# halved.  The runtime stretches it as a 9-slice: the manifest records the
+# left / right caps (socket + stripes) and the socket circle, in output px.
+# socket = least-squares fit of the ring's inner edge (centre x, y, radius to
+# the bright orange); the ring is hand-drawn, its dark inner outline wanders
+# between r 114 and 120, so the runtime portrait covers it up to r 121 and
+# draws its own even outline.
+BANNER = {"crop": (50, 229, 2120, 527), "socket": (381.7, 375.2, 121.0), "cap_l": 540, "cap_r": 1860, "scale": 0.5}
+
+
+def build_banner():
+    b = BANNER
+    arr = stretch_alpha(load("banner.png"), lo=40)
+    cx, cy, r = b["socket"]
+    yy, xx = np.mgrid[0:arr.shape[0], 0:arr.shape[1]].astype(np.float32)
+    d = np.hypot(xx - cx, yy - cy)
+    # dark disc with a soft top-light, plus a thin dark rim against the ring
+    t = np.clip(np.hypot(xx - cx, yy - (cy - r * 0.45)) / (r * 1.6), 0, 1)[:, :, None]
+    disc = np.array([110, 62, 170], np.float32) * (1 - t) + np.array([38, 16, 64], np.float32) * t
+    inside = (d <= r - 3)       # under the portrait; leaves the ring's orange alone
+    arr[:, :, :3] = np.where(inside[:, :, None], disc, arr[:, :, :3]).astype(np.uint8)
+    arr[:, :, 3] = np.where(inside, 255, arr[:, :, 3])
+    x0, y0, x1, y1 = b["crop"]
+    arr = arr[y0:y1, x0:x1]
+    k = b["scale"]
+    w, h = round(arr.shape[1] * k), round(arr.shape[0] * k)
+    arr = np.array(Image.fromarray(arr).resize((w, h), Image.LANCZOS))
+    MANIFEST["images"]["banner"] = {
+        "src": save(arr, "ui/banner.webp", 90), "w": w, "h": h,
+        "capL": round((b["cap_l"] - x0) * k), "capR": round((x1 - b["cap_r"]) * k),
+        "socket": {"x": round((cx - x0) * k, 1), "y": round((cy - y0) * k, 1), "r": round(r * k, 1)},
+    }
+
+
+def build_start_button():
+    """Welcome-screen play button (assets/images/image copy.png, transparent:
+    the round yellow button with slime): cropped to its content, ~2x its
+    230px display width.  Its disc (without the slime) spans 99.4% x 93.5%
+    of the crop, centred at 49.9% / 50.5% - the CSS pulse rings use that."""
+    arr = load("image copy.png")
+    x0, y0, x1, y1 = bbox(arr)
+    arr = arr[y0:y1, x0:x1]
+    w = 480
+    h = round(arr.shape[0] * w / arr.shape[1])
+    arr = np.array(Image.fromarray(arr).resize((w, h), Image.LANCZOS))
+    MANIFEST["images"]["startButton"] = {"src": save(arr, "ui/start-button.webp", 90), "w": w, "h": h}
+
+
+def build_welcome():
+    """Welcome-screen logo (assets/images/welcome.png, transparent): cropped
+    to its content and sized for a ~1200px-wide display.  The welcome
+    background is the existing `roadPersp` (full-picture/image copy 5.png)."""
+    arr = load("welcome.png")
+    x0, y0, x1, y1 = bbox(arr)
+    arr = arr[y0:y1, x0:x1]
+    w = 1300
+    h = round(arr.shape[0] * w / arr.shape[1])
+    arr = np.array(Image.fromarray(arr).resize((w, h), Image.LANCZOS))
+    MANIFEST["images"]["welcomeLogo"] = {"src": save(arr, "ui/welcome-logo.webp", 90), "w": w, "h": h}
+
+
+def build_profile():
+    """Hero profile picture (assets/images/boy/profile.png, opaque on purple):
+    a square around the head, 256 px.  Shown in round frames (HUD portrait,
+    message-bar socket), so the purple corners are simply clipped."""
+    arr = load("boy/profile.png")[90:1110, 110:1130]
+    arr = np.array(Image.fromarray(arr).resize((256, 256), Image.LANCZOS))
+    MANIFEST["images"]["profile"] = {"src": save_opaque(arr, "ui/profile.webp", 90), "w": 256, "h": 256}
 
 
 def build_dirt():
@@ -250,6 +420,70 @@ def _mips(tex, levels=6):
         small = im.resize((max(1, tex.shape[1] // f), max(1, tex.shape[0] // f)), Image.BOX)
         out.append(np.array(small.resize((tex.shape[1], tex.shape[0]), Image.BILINEAR)).astype(np.float32))
     return out
+
+
+# The brick road art (assets/images/land/front-view road.png) is itself drawn in
+# perspective: its top surface is a trapezoid whose far / near width ratio
+# (292 / 769 = 0.38) matches FRONT_CAM between the wall's base (y 790) and the
+# stage bottom (y 1080).  A single homography therefore maps it onto the ground
+# with its side edges exactly on the fence base lines (x = vx +/- road_hw * k).
+ROAD_ART = {
+    "src": "land/front-view road.png",
+    # top-surface corners in the art: far-left, far-right, near-right, near-left
+    "quad": [(252.0, 38.0), (544.0, 38.0), (782.0, 382.0), (13.0, 382.0)],
+    "junk_x": 772,      # a stray panel edge at the art's right border (x >= 772, y < 340)
+    "far_y": 790.0,     # screen row of the far edge (hidden just under the wall's base)
+    "near_y": 1080.0,   # screen row of the near edge (stage bottom)
+    # px (at depth 0) to pull the road edges in from the fence line; negative =
+    # past it.  The fence's bottom rail is ~37px up, so the ground seen under
+    # it lies out to ~805px: the paving runs to 822 and the fence stands ON the
+    # road (no dirt wedge between road and fence).
+    "inset": -80.0,
+}
+
+
+def _homography(src, dst):
+    """Coefficients for PIL's PERSPECTIVE transform mapping dst -> src points."""
+    A, b = [], []
+    for (x, y), (u, v) in zip(dst, src):
+        A.append([x, y, 1, 0, 0, 0, -u * x, -u * y]); b.append(u)
+        A.append([0, 0, 0, x, y, 1, -v * x, -v * y]); b.append(v)
+    return np.linalg.solve(np.array(A, np.float64), np.array(b, np.float64)).tolist()
+
+
+def _lay_front_road(ground, X0, Y0, ss):
+    """Warp the brick road onto the baked ground (RGBA, top-left at stage
+    (X0, Y0)) between the fences, from the wall's base to the stage bottom."""
+    c, r = FRONT_CAM, ROAD_ART
+    vx, vy = c["vp"]
+    art = load(r["src"])
+    art[:340, r["junk_x"]:, 3] = 0
+    # premultiply so the warp's filtering doesn't bleed dark fringe colour
+    pm = art.astype(np.float32)
+    pm[:, :, :3] *= pm[:, :, 3:4] / 255.0
+    hw = c["road_hw"] - r["inset"]
+    k_far = (r["far_y"] - vy) / c["cam_h"]
+    k_near = (r["near_y"] - vy) / c["cam_h"]
+    dst = [(vx - hw * k_far, r["far_y"]), (vx + hw * k_far, r["far_y"]),
+           (vx + hw * k_near, r["near_y"]), (vx - hw * k_near, r["near_y"])]
+    # output-space (supersampled) coordinates
+    dst = [((x - X0) * ss, (y - Y0) * ss) for x, y in dst]
+    H, W = ground.shape[:2]
+    coeffs = _homography(r["quad"], dst)
+    big = []
+    for ch in range(4):
+        im = Image.fromarray(np.clip(pm[:, :, ch], 0, 255).astype(np.uint8))
+        big.append(np.array(im.transform((W * ss, H * ss), Image.PERSPECTIVE, coeffs, Image.BICUBIC)))
+    warped = np.dstack(big)
+    warped = np.array(Image.fromarray(warped).resize((W, H), Image.LANCZOS)).astype(np.float32)
+    # depth grading: the far end a touch darker / hazier so it sits in the scene
+    ys = Y0 + np.arange(H, dtype=np.float32)
+    t = np.clip((ys - r["far_y"]) / (r["near_y"] - r["far_y"]), 0, 1)[:, None, None]
+    warped[:, :, :3] *= 0.84 + 0.16 * t
+    a = warped[:, :, 3:4] / 255.0
+    g = ground.astype(np.float32)
+    g[:, :, :3] = warped[:, :, :3] + g[:, :, :3] * (1 - a)      # premultiplied "over"
+    return np.clip(g, 0, 255).astype(np.uint8)
 
 
 def build_front_road():
@@ -293,6 +527,7 @@ def build_front_road():
     alpha = np.clip((ys - gy0) / 22.0, 0, 1)[:, None] * np.ones((1, len(xs)))
     rgba = np.dstack([np.clip(out, 0, 255), alpha * 255]).astype(np.uint8)
     rgba = np.array(Image.fromarray(rgba).resize((W, gy1 - gy0), Image.LANCZOS))
+    rgba = _lay_front_road(rgba, X0, gy0, ss)
     MANIFEST["images"]["frontGround"] = {"src": save(rgba, "bg/front-ground.webp", 82), "w": W, "h": gy1 - gy0, "y": gy0}
 
     # ---- fences: rows y 420..1080 ------------------------------------------
@@ -333,18 +568,81 @@ def build_front_road():
 # --------------------------------------------------------------------------- #
 # walls
 # --------------------------------------------------------------------------- #
+# Wall art (black backdrop, the see-through part of each hole is black too):
+#   wall/image copy 2.png  front view (flat face, round hole)
+#   wall/image copy.png    three turned views, least to most turned
+WALL_FRONT = "wall/image copy 2.png"
+WALL_ANGLES = "wall/image copy.png"
+# Front opening (rim on the wall face) of each turned wall, in its cropped
+# webp px: centre, semi-axes, tilt (deg clockwise).  Direct ellipse fit
+# (Fitzgibbon) to the rim highlight (lower left), the face/tunnel boundary
+# (upper left) and the face's edge at the see-through part (right).  The side
+# view's glass fills this ellipse.  Re-fit if the wall art changes.
+WALL_RIMS = {"angle1": {"cx": 122.8, "cy": 285.1, "rx": 76.7, "ry": 130.9, "rot": 3.0}}
+
+
+def _disk(r):
+    y, x = np.mgrid[-r:r + 1, -r:r + 1]
+    return x * x + y * y <= r * r
+
+
+def _solid_wall(arr, r=9):
+    """The art's bricks have rounded corners, so wherever two bricks meet the
+    wall's outline (outer edge, hole edge) a small V-notch of backdrop shows
+    through and the wall reads as loose blocks.  Close the outline (disk r)
+    and fill the notches with the art's own mortar colour."""
+    a = arr[:, :, 3].astype(np.float32) / 255.0
+    solid = a > 0.5
+    pad = r + 2
+    closed = ndimage.binary_closing(np.pad(solid, pad), structure=_disk(r))[pad:-pad, pad:-pad]
+    # soft edge for the filled outline
+    cover = np.maximum(a, np.clip(ndimage.gaussian_filter(closed.astype(np.float32), 0.8) * 1.15 - 0.075, 0, 1))
+    lum = arr[:, :, :3].astype(np.float32).mean(axis=2)
+    mortar_px = solid & (lum < 70) & ndimage.binary_erosion(solid, iterations=3)
+    mortar = np.median(arr[mortar_px][:, :3].astype(np.float32), axis=0) if mortar_px.any() else np.array([60, 25, 12], np.float32)
+    add = (cover - a)[:, :, None]
+    rgb = arr[:, :, :3].astype(np.float32) * a[:, :, None] + mortar * add
+    out = arr.copy()
+    out[:, :, :3] = np.clip(rgb / np.maximum(cover, 1e-6)[:, :, None], 0, 255).astype(np.uint8)
+    out[:, :, 3] = np.clip(cover * 255, 0, 255).astype(np.uint8)
+    return out
+
+
+def _wall_part(arr):
+    """Key the black backdrop and the hole to alpha, close the outline, crop."""
+    arr = key_black(arr, lo=4, hi=22, min_area=2000)
+    arr = _solid_wall(arr)
+    bx0, by0, bx1, by1 = bbox(arr, thresh=40)
+    return arr[by0:by1, bx0:bx1].copy()
+
+
+def _wall_base(arr, thresh=128):
+    """Base corners of a turned wall, as drawn: far = bottom of its left
+    (far) edge, near = its lowest point (the near bottom corner)."""
+    a = arr[:, :, 3] > thresh
+    cols = np.where(a.any(axis=0))[0]
+    x0 = int(cols[0])
+    far_y = int(max(np.where(a[:, c])[0].max() for c in range(x0, x0 + 4)))
+    bottoms = np.array([np.where(a[:, c])[0].max() if a[:, c].any() else -1 for c in range(a.shape[1])])
+    near_y = int(bottoms.max())
+    near_x = int(np.where(bottoms >= near_y - 1)[0].mean())
+    return {"far": {"x": x0, "y": far_y}, "near": {"x": near_x, "y": near_y}}
+
+
 def build_walls():
     print("walls")
-    sheet = load("wall/image.png")
-    cols = runs((sheet[:, :, 3] > 20).any(axis=0), min_len=60)
-    names = ["front", "angle1", "angle2", "angle3"]
-    assert len(cols) == 4, cols
-    for name, (x0, x1) in zip(names, cols):
-        part = sheet[:, x0:x1]
-        bx0, by0, bx1, by1 = bbox(part)
-        part = stretch_alpha(part[by0:by1, bx0:bx1].copy(), lo=24)
-        hole = interior_hole(part)
-        MANIFEST["walls"][name] = {"src": save(part, f"wall/{name}.webp", 88), "w": part.shape[1], "h": part.shape[0], "hole": hole}
+    front = _wall_part(load(WALL_FRONT))
+    MANIFEST["walls"]["front"] = {"src": save(front, "wall/front.webp", 88), "w": front.shape[1], "h": front.shape[0], "hole": interior_hole(front)}
+    sheet = load(WALL_ANGLES)
+    opaque = sheet[:, :, :3].max(axis=2) > 40
+    cols = runs(opaque.sum(axis=0) > 5, min_len=60, merge_gap=8)
+    assert len(cols) == 3, cols
+    for name, (x0, x1) in zip(["angle1", "angle2", "angle3"], cols):
+        part = _wall_part(sheet[:, max(0, x0 - 6):x1 + 6].copy())
+        MANIFEST["walls"][name] = {"src": save(part, f"wall/{name}.webp", 88), "w": part.shape[1], "h": part.shape[0],
+                                   "hole": interior_hole(part), "base": _wall_base(part)}
+        if name in WALL_RIMS:
+            MANIFEST["walls"][name]["rim"] = WALL_RIMS[name]
 
 
 # --------------------------------------------------------------------------- #
@@ -383,6 +681,8 @@ def build_hero():
             "anchorY": 0.95,
         }
 
+    build_hero_leap()
+
     # Idle sheet: left half = side idle (4x3), right half = back idle (4x3), uneven spacing.
     arr = stretch_alpha(load("boy/Side and Back Idle Animation Sprite Sheet.png"), lo=30)
     arr = keep_big_components(arr, thresh=140, min_area=6000, grow=3)
@@ -403,6 +703,50 @@ def build_hero():
             "fw": CELL, "fh": CELL, "cols": COLS, "rows": ROWS, "frames": COLS * ROWS,
             "anchorY": 0.95,
         }
+
+
+LEAP_W, LEAP_H = 420, 362          # wider cell: the mid-air strides are long
+LEAP_GROUND = round(0.95 * LEAP_H)  # feet line, matches anchorY
+
+
+def build_hero_leap():
+    """boy/jump.png -> hero.sideLeap: the run-up leap through the wall circle.
+    4x3 sheet with uneven spacing: row 0 stand -> crouch -> take-off, row 1
+    mid-air, row 2 landing -> stand.  Each figure is re-packed into a fixed
+    cell, torso centred, feet on the shared ground line."""
+    arr = keep_big_components(load("boy/jump.png"), thresh=140, min_area=6000, grow=3)
+    arr = stretch_alpha(arr, lo=30)
+    mask = arr[:, :, 3] > 140
+    lab, n = ndimage.label(mask)
+    sizes = ndimage.sum(mask, lab, range(1, n + 1))
+    figs = [sl for i, sl in enumerate(ndimage.find_objects(lab)) if sizes[i] >= 6000]
+    assert len(figs) == 12, len(figs)
+    rows = sorted(figs, key=lambda s: (s[0].start + s[0].stop) / 2)
+    rows = [sorted(rows[r * 4:(r + 1) * 4], key=lambda s: s[1].start) for r in range(3)]
+    # sheet y of the ground under each row; row 1 is all mid-air, so place its
+    # lowest foot a little above the ground (continues the take-off frame).
+    ground = [max(s[0].stop for s in rows[0]), max(s[0].stop for s in rows[1]) + 17, max(s[0].stop for s in rows[2])]
+    canvas = np.zeros((3 * LEAP_H, 4 * LEAP_W, 4), np.uint8)
+    pad = 4
+    for r, row in enumerate(rows):
+        for c, (ys, xs) in enumerate(row):
+            y0, y1 = max(ys.start - pad, 0), min(ys.stop + pad, arr.shape[0])
+            x0, x1 = max(xs.start - pad, 0), min(xs.stop + pad, arr.shape[1])
+            fig = arr[y0:y1, x0:x1]
+            fh, fw = fig.shape[:2]
+            # torso x = alpha centroid of the upper 45% (head + chest)
+            top = fig[: int(fh * 0.45), :, 3].astype(np.float32)
+            tx = float((top.sum(axis=0) * np.arange(fw)).sum() / max(top.sum(), 1))
+            dx = int(np.clip(round(LEAP_W / 2 - tx), 0, LEAP_W - fw))
+            dy = LEAP_GROUND - (ground[r] - y0)
+            sy0, sy1 = max(0, -dy), min(fh, LEAP_H - dy)
+            cy, cx = r * LEAP_H + dy + sy0, c * LEAP_W + dx
+            canvas[cy:cy + sy1 - sy0, cx:cx + fw] = fig[sy0:sy1]
+    MANIFEST["sprites"]["hero.sideLeap"] = {
+        "src": save(canvas, "hero/sideLeap.webp", 86),
+        "fw": LEAP_W, "fh": LEAP_H, "cols": 4, "rows": 3, "frames": 12,
+        "anchorY": 0.95,
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -447,7 +791,34 @@ ZOMBIE_SIDE = {
 }
 # Single-pose sheets are drawn at a different scale than their animations;
 # scaleAdjust tells the runtime how to match them to the last "die" frame.
-SCALE_ADJUST = {"zombie.side.dead": 0.6, "zombie.front.dead": 0.22}
+# The leap sheet is drawn a touch larger than the side run/attack sheets.
+SCALE_ADJUST = {"zombie.side.dead": 0.6, "zombie.front.dead": 0.22, "zombie.side.leap": 0.9}
+
+
+def build_zombie_leap():
+    """zombi/image.png -> zombie.side.leap: the jump through the wall circle
+    at the hero.  4x4 grid of 320x384 cells, feet on y=348 in every cell:
+    0-1 crouch, 2-6 airborne, 7-11 land, 12-14 attack-ready (15 faces the
+    other way; unused).  Each frame is shifted so the shirt (the most stable
+    part of a leaping body) sits at the cell centre."""
+    arr = stretch_alpha(load("zombi/image.png"), lo=20)
+    arr = keep_big_components(arr, thresh=140, min_area=6000, grow=3)
+    FW, FH, COLS, ROWS = 320, 384, 4, 4
+    rgb = arr[:, :, :3].astype(int)
+    shirt = (rgb[:, :, 2] > 150) & (rgb[:, :, 2] > rgb[:, :, 0] + 30) & (arr[:, :, 3] > 200)
+    canvas = np.zeros_like(arr)
+    for r in range(ROWS):
+        for c in range(COLS):
+            ys, xs = slice(r * FH, (r + 1) * FH), slice(c * FW, (c + 1) * FW)
+            cell, sx = arr[ys, xs], np.nonzero(shirt[ys, xs])[1]
+            dx = int(round(FW / 2 - sx.mean())) if len(sx) else 0
+            src0, src1 = max(0, -dx), min(FW, FW - dx)
+            canvas[ys, c * FW + src0 + dx:c * FW + src1 + dx] = cell[:, src0:src1]
+    MANIFEST["sprites"]["zombie.side.leap"] = {
+        "src": save(canvas, "zombie/side-leap.webp", 86),
+        "fw": FW, "fh": FH, "cols": COLS, "rows": ROWS, "frames": COLS * ROWS, "loop": False,
+        "anchorY": round(348.5 / FH, 4), "facing": "left",
+    }
 
 
 def build_zombie():
@@ -504,6 +875,7 @@ def build_zombie():
             "fw": fw, "fh": fh, "cols": cols, "rows": rows, "frames": cols * rows, "loop": loop,
             "anchorY": 0.83, "facing": "left",
         }
+    build_zombie_leap()
 
 
 # --------------------------------------------------------------------------- #
