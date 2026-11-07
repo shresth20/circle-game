@@ -13,6 +13,9 @@
   const SPEECH_LANG = { en: 'en-IN', hi: 'hi-IN', mr: 'mr-IN', te: 'te-IN', gu: 'gu-IN', or: 'or-IN' };
   let table = { en: {} };
   let lang = 'en';
+  /* Voice-over is switched off for now (new recordings coming). Set to true
+     to bring back clips + browser-speech fallback; nothing else needs changing. */
+  const VOICE_ON = false;
   let voiceClips = new Set();
   let currentClip = null;
 
@@ -58,17 +61,22 @@
     hasVoice(key) {
       return voiceClips.has(key);
     },
+    /* Plays the line; resolves when it has finished (or was cut off / could
+       not play).  Never rejects. */
     say(key, vars) {
       const audio = window.ZD && ZD.audio;
-      if (audio && (audio.muted || !audio.voiceEnabled)) return;
+      if (!VOICE_ON || (audio && audio.muted)) return Promise.resolve();
       I18n.stop();
       if (voiceClips.has(key)) {
         const a = new Audio(I18n.voice(key));
         currentClip = a;
-        a.play().catch(() => audio && audio.say(I18n.t(key, vars)));
-      } else if (audio) {
-        audio.say(I18n.t(key, vars));
+        return new Promise((res) => {
+          a.addEventListener('ended', res, { once: true });
+          a.addEventListener('pause', res, { once: true });
+          a.play().catch(() => (audio ? audio.say(I18n.t(key, vars)) : Promise.resolve()).then(res));
+        });
       }
+      return audio ? audio.say(I18n.t(key, vars)) : Promise.resolve();
     },
     stop() {
       if (currentClip) {

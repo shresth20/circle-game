@@ -69,8 +69,22 @@ window.ZD = window.ZD || {};
 
   /* A clock whose timeouts can be paused (pause menu) and resumed. */
   const timers = new Set();
+  const waapi = new Set(); // Web Animations (compositor camera moves), see track()
   const clock = {
     paused: false,
+    /* Pause a Web Animation with the game (camera moves run on the
+       compositor via element.animate, outside anime.js). */
+    track(anim) {
+      waapi.add(anim);
+      const drop = () => waapi.delete(anim);
+      anim.addEventListener('finish', drop);
+      anim.addEventListener('cancel', drop);
+      if (clock.paused) {
+        anim.pause();
+        anim._clockPaused = true;
+      }
+      return anim;
+    },
     timeout(fn, ms) {
       const t = { fn, remaining: ms, start: performance.now(), id: null, done: false };
       const arm = () => {
@@ -111,6 +125,12 @@ window.ZD = window.ZD || {};
         clock.frozen = anime.running.slice();
         clock.frozen.forEach((a) => a.pause());
       }
+      waapi.forEach((a) => {
+        if (a.playState === 'running' || a.pending) {
+          a.pause();
+          a._clockPaused = true;
+        }
+      });
       ZD.sprites && ZD.sprites.setPaused(true);
     },
     resume() {
@@ -122,6 +142,12 @@ window.ZD = window.ZD || {};
       // (skip tweens that were deliberately stopped while paused: a._killed)
       if (window.anime) (clock.frozen || []).forEach((a) => !a.completed && !a._killed && a.play());
       clock.frozen = [];
+      waapi.forEach((a) => {
+        if (a._clockPaused) {
+          a._clockPaused = false;
+          a.play();
+        }
+      });
       ZD.sprites && ZD.sprites.setPaused(false);
     },
     clearAll() {

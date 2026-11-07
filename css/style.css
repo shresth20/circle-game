@@ -70,6 +70,9 @@ button { font-family: inherit; }
   position: absolute;
   inset: 0;
   perspective: 1600px;
+  /* fx.shake moves it: its own compositor layer, so a shake never repaints
+     the grade / vignette gradients */
+  will-change: transform;
 }
 
 /* ---------------- scenes & layers ---------------- */
@@ -80,6 +83,11 @@ button { font-family: inherit; }
   visibility: hidden;
   pointer-events: none;
   transform-origin: 50% 50%;
+  /* each view is always its own compositor layer, so the view swings
+     (Camera.to, Web Animations) never change the layer setup mid-flow: no
+     re-raster pop and no colour shift of the grade blended over it.  A
+     hidden view (visibility: hidden) is not painted at all. */
+  will-change: transform, opacity;
 }
 .scene.active { opacity: 1; visibility: visible; }
 .layer {
@@ -105,7 +113,8 @@ button { font-family: inherit; }
   filter: var(--f-wall);
 }
 .wall-side { filter: var(--f-wall) drop-shadow(-18px 10px 14px rgba(20, 0, 40, 0.45)); }
-.wall-slot { position: absolute; inset: 0; pointer-events: none; }
+/* moved every frame by setScroll: own compositor layer (see scrollLayer in js/scene.js) */
+.wall-slot { position: absolute; inset: 0; pointer-events: none; will-change: transform; }
 .wall-cover { position: absolute; overflow: visible; pointer-events: none; filter: var(--f-wall); }
 .wall-cover-wrap, .wall-box { position: absolute; inset: 0; pointer-events: none; }
 .wall-shadow { position: absolute; height: 32px; border-radius: 50%; pointer-events: none; background: radial-gradient(ellipse at center, rgba(30, 6, 40, 0.55), rgba(30, 6, 40, 0) 70%); }
@@ -113,6 +122,7 @@ button { font-family: inherit; }
   position: absolute;
   border-radius: 50%;
   background: radial-gradient(circle at 50% 35%, rgba(70, 40, 120, 0.25), rgba(10, 5, 25, 0.8) 85%);
+  will-change: opacity; /* fades as the zombie climbs: compositor only */
 }
 .props { position: absolute; inset: 0; pointer-events: none; }
 /* generated scenery band (Scatter in js/scene.js): moved as one by transform */
@@ -156,18 +166,29 @@ button { font-family: inherit; }
   z-index: 51;
   pointer-events: none;
   opacity: 0;
-  background: radial-gradient(ellipse at 15% 25%, rgba(255, 50, 80, 0.55), rgba(255, 50, 80, 0.15) 40%, rgba(255, 0, 60, 0) 70%);
-  transition: opacity 0.4s;
+  transition: opacity 0.5s ease-out;
 }
-#world.alarm #alarm-light { opacity: 1; animation: alarmPulse 0.9s ease-in-out infinite alternate; }
-@keyframes alarmPulse { from { opacity: 0.25; } to { opacity: 1; } }
+/* the red light pulses on an inner layer; switching the alarm on / off
+   fades the container, so it never snaps mid-pulse */
+#alarm-light::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse at 15% 25%, rgba(255, 50, 80, 0.55), rgba(255, 50, 80, 0.15) 40%, rgba(255, 0, 60, 0) 70%);
+  animation: alarmPulse 1.3s ease-in-out infinite alternate;
+}
+#world.alarm #alarm-light { opacity: 1; }
+@keyframes alarmPulse { from { opacity: 0.45; } to { opacity: 1; } }
 #flash {
   position: absolute;
   inset: -400px;
   opacity: 0;
   pointer-events: none;
   z-index: 60;
+  will-change: opacity;
 }
+/* drifting clouds: own layers, so their per-frame drift never repaints the view */
+.layer.cloud { will-change: transform; }
 
 /* ---------------- sprites ---------------- */
 .sprite {
@@ -196,13 +217,34 @@ button { font-family: inherit; }
 
 /* ---------------- glass mechanism ---------------- */
 .glass { position: absolute; overflow: visible; pointer-events: none; }
-.glass-outline { animation: openPulse 1.2s ease-in-out infinite alternate; }
-.glass-outline.locked { stroke: #ffffff; stroke-width: 7; animation: none; }
-.glass-outline.good { stroke: var(--green); animation: none; }
-.glass-outline.bad { stroke: var(--red); animation: none; }
-@keyframes openPulse { from { opacity: 1; } to { opacity: 0.6; } }
-.glass-danger { opacity: 0; }
-.glass.danger .glass-danger { animation: dangerPulse 0.45s ease-in-out infinite alternate; }
+/* GlassMech: the glass svg plus small svgs on the same circle (danger ring,
+   rim lights, pick ping) inside one zero-size box; the glows animate whole
+   svgs (compositor opacity / transform), never blurred paths in place */
+.glass-wrap, .glass-lights { position: absolute; left: 0; top: 0; width: 0; height: 0; pointer-events: none; }
+/* rim lights of the opening (light-yellow neon): the bloom breathes slowly
+   and softly, the tube and filament stay lit; picked / approach flare
+   white-yellow, the outcome turns them green or red */
+.glass-halo-layer { animation: rimBreath 2.2s ease-in-out infinite alternate; }
+@keyframes rimBreath { from { opacity: 1; } to { opacity: 0.62; } }
+.glass-lights.picked .glass-halo-layer, .glass-lights.locked .glass-halo-layer,
+.glass-lights.good .glass-halo-layer, .glass-lights.bad .glass-halo-layer { animation: none; opacity: 1; }
+.glass-lights.picked .glass-halo, .glass-lights.locked .glass-halo { stroke: #fff4a8; }
+.glass-lights.picked .glass-outline, .glass-lights.locked .glass-outline { stroke: #fffbe0; stroke-width: 8; }
+.glass-lights.good .glass-halo, .glass-lights.good .glass-outline { stroke: var(--green); }
+.glass-lights.bad .glass-halo, .glass-lights.bad .glass-outline { stroke: var(--red); }
+.glass-lights.good .glass-filament { stroke: #eaffef; }
+.glass-lights.bad .glass-filament { stroke: #ffe3e8; }
+.glass-ping-layer { opacity: 0; }
+
+/* ---------------- front-view camera rig ---------------- */
+/* always its own compositor layer: the camera moves (Web Animations) are
+   rasterised at their largest zoom and never re-rasterise when they stop */
+.cam-rig { position: absolute; inset: 0; transform-origin: 0 0; will-change: transform; }
+/* darkens the edges while the camera focuses on the wall (outside the rig,
+   same box as #vignette; centre set in js/scene.js) */
+.focus-vignette { position: absolute; left: -320px; top: -300px; width: 2560px; height: 1700px; z-index: 40; opacity: 0; pointer-events: none; will-change: opacity; }
+.glass-danger-layer { opacity: 0; }
+.glass-wrap.danger .glass-danger-layer { animation: dangerPulse 0.45s ease-in-out infinite alternate; }
 @keyframes dangerPulse { from { opacity: 0.1; } to { opacity: 0.85; } }
 
 /* zombie health: one orb per hit still needed (front view, under the window) */
@@ -284,15 +326,19 @@ button { font-family: inherit; }
 /* ---------------- safe zone (finale) ---------------- */
 .gate { position: absolute; pointer-events: none; will-change: transform; }
 .safe-zone-art { position: absolute; inset: 0; background-size: 100% 100%; filter: drop-shadow(0 18px 18px rgba(20, 8, 40, 0.45)); }
-.safe-door { position: absolute; overflow: hidden; border-radius: 6px 6px 2px 2px; }
+.safe-door { position: absolute; border-radius: 4px 4px 1px 1px; }
+/* sliding gate: the box clips the leaves at the pillars' inner edges */
+.safe-gate { position: absolute; overflow: hidden; pointer-events: none; will-change: transform; }
+.safe-gate-half { position: absolute; top: 0; width: 50%; height: 100%; background-size: 100% 100%; will-change: transform; }
+.safe-gate-half.left { left: 0; }
+.safe-gate-half.right { right: 0; }
 .safe-door-light {
   position: absolute;
   inset: 0;
   opacity: 0;
-  transform: scaleY(0);
-  transform-origin: 50% 0;
-  background: radial-gradient(ellipse at 50% 70%, #fffbe0 0%, #ffe27a 45%, #f5a623 100%);
-  box-shadow: inset 0 0 26px rgba(255, 140, 20, 0.9);
+  border-radius: inherit;
+  background: radial-gradient(ellipse at 50% 65%, #fffbe0 0%, #ffe27a 55%, rgba(245, 166, 35, 0.85) 100%);
+  box-shadow: 0 0 22px 6px rgba(255, 196, 80, 0.55);
 }
 .safe-label {
   position: absolute;
@@ -301,7 +347,7 @@ button { font-family: inherit; }
   justify-content: center;
   font-family: var(--display);
   color: #fff6e6;
-  background: #4a2c22;
+  background: #8a3445; /* the sign's own maroon */
   border-radius: 8px;
   white-space: nowrap;
   text-shadow: 0 2px 0 #1e0f0a;
@@ -321,23 +367,19 @@ button { font-family: inherit; }
   overflow: hidden;
   box-shadow: 0 6px 0 var(--purple), 0 10px 20px rgba(0, 0, 0, 0.4);
 }
-.hearts {
-  display: flex;
-  gap: 8px;
-  padding: 12px 18px;
-  background: rgba(26, 15, 51, 0.7);
-  border: 3px solid #8a56c9;
-  border-radius: 40px;
-  box-shadow: 0 6px 0 rgba(0, 0, 0, 0.35);
+.hud-stage {
+  padding: 8px 22px;
+  border-radius: 999px;
+  background: var(--purple);
+  border: 4px solid var(--yellow);
+  box-shadow: 0 5px 0 #2e1450, 0 8px 16px rgba(0, 0, 0, 0.4);
+  color: #fff;
+  font-family: var(--display);
+  font-size: 36px;
+  line-height: 1.1;
+  white-space: nowrap;
 }
-.heart {
-  width: 44px;
-  height: 40px;
-  background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 22'><path d='M12 21s-8-5.2-10.5-10A5.8 5.8 0 0112 5a5.8 5.8 0 0110.5 6C20 15.8 12 21 12 21z' fill='%23ff3b5c' stroke='%23fff' stroke-width='1.6'/><ellipse cx='8' cy='8' rx='2' ry='1.3' fill='%23fff' opacity='.7'/></svg>") center / contain no-repeat;
-  filter: drop-shadow(0 3px 2px rgba(0, 0, 0, 0.4));
-  transition: filter 0.3s, transform 0.3s;
-}
-.heart.lost { filter: grayscale(1) brightness(0.45); transform: scale(0.8); }
+.hud-stage:empty { display: none; }
 .pip {
   width: 56px;
   height: 16px;
@@ -366,49 +408,172 @@ button { font-family: inherit; }
 .icon-btn.pause span { width: 11px; height: 36px; background: #fff; border-radius: 3px; margin: 0 5px; display: inline-block; }
 .icon-btn.muted { background: linear-gradient(#8a8fa3, #4b5063); box-shadow: 0 6px 0 #2a2d3a; }
 
+/* ---------------- run-and-jump controller ----------------
+   js/controls.js: RUN bottom-left (hold), JUMP bottom-right (tap); icons
+   only.  They sit in the corners outside the message bar (x 262-1658).
+   The face sinks onto its base when pressed; .hint pulses a ring. */
+#controls { position: absolute; inset: 0; pointer-events: none; z-index: 73; }
+.ctrl-btn {
+  position: absolute;
+  bottom: 40px;
+  width: 196px;
+  height: 196px;
+  padding: 0;
+  border: 0;
+  background: none;
+  display: none;
+  pointer-events: auto;
+  touch-action: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: pointer;
+  opacity: 0;
+}
+#controls.visible .ctrl-btn { display: block; }
+.ctrl-btn.run { left: 44px; }
+.ctrl-btn.jump { right: 44px; }
+.ctrl-btn:focus { outline: none; }
+.ctrl-base,
+.ctrl-face,
+.ctrl-ring { position: absolute; left: 0; top: 0; width: 100%; height: 100%; border-radius: 50%; pointer-events: none; }
+.ctrl-base { transform: translateY(12px); box-shadow: 0 16px 22px rgba(0, 0, 0, 0.45); }
+.ctrl-face {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  border: 7px solid #fff;
+  transition: transform 0.09s ease-out;
+}
+.ctrl-face svg { width: 62%; height: 62%; filter: drop-shadow(0 4px 0 rgba(0, 0, 0, 0.25)); }
+.ctrl-btn.pressed .ctrl-face { transform: translateY(10px) scale(0.97); }
+.ctrl-btn.run .ctrl-base { background: #146b2d; }
+.ctrl-btn.run .ctrl-face { background: radial-gradient(circle at 50% 30%, #7af08f, #2fb552 62%, #1f8f3e); }
+.ctrl-btn.jump .ctrl-base { background: #a8430a; }
+.ctrl-btn.jump .ctrl-face { background: radial-gradient(circle at 50% 30%, #ffd27a, #ff9a3c 62%, #e8711b); }
+.ctrl-ring { border: 8px solid #fff; opacity: 0; }
+.ctrl-btn.hint .ctrl-ring { animation: ctrl-pulse 1s ease-out infinite; }
+.ctrl-btn.run.hint .ctrl-ring { border-color: var(--green); }
+.ctrl-btn.jump.hint .ctrl-ring { border-color: var(--yellow); }
+.ctrl-btn.hint .ctrl-face { animation: ctrl-bob 1s ease-in-out infinite; }
+.ctrl-btn.hint.pressed .ctrl-face { animation: none; }
+@keyframes ctrl-pulse {
+  from { transform: scale(1); opacity: 0.9; }
+  to { transform: scale(1.4); opacity: 0; }
+}
+@keyframes ctrl-bob {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.07); }
+}
+
+/* ---------------- zombie timer meter ----------------
+   Top strip during a timed question (ZD.ui.timerShow): zombie face (left)
+   -> red line -> small brick wall (right).  Size is set from JS
+   (ZD.ui.TIMER); the face and line move by transform only.  The line is
+   deliberately plain (no glow / pulse) so it does not pull the eye. */
+#timer {
+  position: absolute;
+  top: 18px;
+  left: 50%;
+  translate: -50% 0;
+  z-index: 71;
+  pointer-events: none;
+  visibility: hidden;
+  opacity: 0;
+}
+#timer.visible { visibility: visible; }
+/* calm cartoon line: solid red, no outline, with a soft
+   steady glow - no neon (no white-hot core, no flicker/pulse: that was too
+   distracting for learners) */
+.timer-line {
+  position: absolute;
+  height: 14px; /* ZD.ui.TIMER.LINE_H */
+  border-radius: 7px;
+  transform-origin: 100% 50%; /* shrinks toward the wall */
+  background: #e0302a;
+  box-shadow: 0 0 12px 2px rgba(224, 48, 42, 0.55); /* soft steady glow */
+  will-change: transform;
+}
+.timer-wall {
+  position: absolute;
+  right: 0;
+  filter: drop-shadow(0 6px 8px rgba(0, 0, 0, 0.45));
+}
+.timer-face {
+  position: absolute;
+  left: 0;
+  will-change: transform;
+}
+.timer-face-img {
+  display: block;
+  filter: drop-shadow(0 6px 8px rgba(0, 0, 0, 0.5));
+}
+
 /* ---------------- answer panel ----------------
-   Side panel right of the wall: question title + three text pills.  Colours
-   follow the scene: night-purple panel framed in the wall's orange, pills
-   in the brick-orange of the window ring with a dark-brown edge.  Pills are
-   128 stage px tall; the whole pill is the touch target.  Only transform /
-   opacity are transitioned; feedback colours switch instantly. */
+   No frame: three text pills float in the open space right of the wall.
+   The box spans wall right edge -> stage right edge, wall top -> wall
+   bottom as framed while asking (js/ui.js _placePanel sets it; the values
+   below are that result) and centres the column in it, both ways.  Pills are brick-orange
+   like the window ring, with a chunky dark-brown base and a soft drop
+   shadow so they read on the night scene without a panel behind them.
+   Pills are 124 stage px tall; the whole pill is the touch target.  Only
+   transform / opacity are transitioned; feedback colours switch instantly. */
 #options {
   position: absolute;
-  right: 34px;
-  top: 180px;
-  width: 486px;
-  padding: 24px 26px 32px;
-  border-radius: 40px;
-  background: linear-gradient(180deg, rgba(58, 24, 96, 0.94), rgba(30, 11, 52, 0.94));
-  border: 5px solid #ff9a3c;
-  box-shadow: inset 0 0 0 3px rgba(255, 214, 150, 0.12), 0 0 32px rgba(255, 154, 60, 0.35), 0 16px 34px rgba(0, 0, 0, 0.5);
+  left: 1247px;
+  top: 147px;
+  width: 673px;
+  height: 756px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   z-index: 72;
-  pointer-events: auto;
+  pointer-events: none; /* only the pills take taps */
   visibility: hidden;
   opacity: 0;
   transition: opacity 0.2s, visibility 0s 0.2s;
 }
 #options.visible { visibility: visible; opacity: 1; transition: opacity 0.2s; }
-#options.locked { pointer-events: none; }
-.answer-list { display: flex; flex-direction: column; gap: 20px; }
+#options.locked .answer { pointer-events: none; }
+/* Backing card behind the pills: a borderless night-purple patch with a
+   soft shadow, no outline.  Bottom padding is 10px deeper to take the pills'
+   base edge, so pills sit visually centred in the card and the card
+   centres in the box. */
+.answer-list {
+  display: flex;
+  flex-direction: column;
+  gap: 30px;
+  width: 520px;
+  padding: 40px 40px 50px;
+  border-radius: 44px;
+  background: linear-gradient(180deg, rgba(62, 26, 104, 0.88), rgba(32, 12, 58, 0.9));
+  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.08), 0 18px 40px rgba(8, 0, 22, 0.55);
+}
 .answer {
   position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 128px;
-  padding: 0 28px;
+  height: 124px;
+  padding: 0 30px;
+  border: 0;
   border-radius: 999px;
-  background: linear-gradient(180deg, #ffb45c, #e8701f);
-  border: 4px solid #ffd59a;
-  box-shadow: inset 0 3px 0 rgba(255, 255, 255, 0.3), 0 8px 0 #7a3510, 0 13px 18px rgba(0, 0, 0, 0.4);
+  background: linear-gradient(180deg, #ffbd6b 0%, #ff9a3c 48%, #e8701f 100%);
+  box-shadow:
+    inset 0 4px 0 rgba(255, 255, 255, 0.35),
+    inset 0 -6px 0 rgba(160, 64, 10, 0.35),
+    0 10px 0 #7a3510,
+    0 18px 26px rgba(10, 0, 25, 0.55);
   color: #fff;
   cursor: pointer;
+  pointer-events: auto;
   transition: transform 0.15s ease-out, opacity 0.2s;
 }
 .answer:hover { transform: translateY(-4px); }
-.answer:active { transform: translateY(3px); }
-.answer:focus-visible { outline: 5px solid #fff; outline-offset: 3px; }
+.answer:active { transform: translateY(4px); }
+.answer:focus-visible { outline: 5px solid #fff; outline-offset: 4px; }
 .answer-label {
   font-family: var(--display);
   font-size: 44px;
@@ -423,7 +588,6 @@ button { font-family: inherit; }
   opacity: 1;
   transform: scale(1.04);
   background: linear-gradient(180deg, #fff3b8, #ffd166);
-  border-color: #fff;
   color: #5b2a0e;
   box-shadow: 0 0 0 6px rgba(255, 209, 102, 0.4), 0 0 26px rgba(255, 209, 102, 0.85), 0 8px 0 #a8650a;
 }
@@ -431,7 +595,6 @@ button { font-family: inherit; }
 #options .answer.correct {
   opacity: 1;
   background: linear-gradient(180deg, #9dff9a, #3fcf5a);
-  border-color: #e3ffe0;
   color: #12401c;
   box-shadow: 0 0 0 6px rgba(124, 255, 138, 0.4), 0 0 26px rgba(124, 255, 138, 0.7), 0 8px 0 #1f6b2d;
 }
@@ -439,44 +602,17 @@ button { font-family: inherit; }
 #options .answer.wrong {
   opacity: 1;
   background: linear-gradient(180deg, #ff6f86, #d61f44);
-  border-color: #ffd0d8;
   box-shadow: 0 0 0 6px rgba(255, 59, 92, 0.4), 0 8px 0 #7a1020;
 }
 #options .answer.wrong .answer-label { text-shadow: 0 3px 0 #7a1020; }
 #options .answer.reveal {
   opacity: 1;
-  border-color: var(--green);
-  border-style: dashed;
+  outline: 5px dashed var(--green);
+  outline-offset: 4px;
   box-shadow: 0 0 0 6px rgba(124, 255, 138, 0.35), 0 0 26px rgba(124, 255, 138, 0.7), 0 8px 0 #1f6b2d;
 }
 
-/* ---------------- stamp / banner / caption ---------------- */
-.stamp {
-  position: absolute;
-  left: 50%;
-  top: 44%;
-  translate: -50% -50%;
-  font-family: var(--display);
-  font-size: 88px;
-  padding: 14px 48px;
-  border-radius: 70px;
-  border: 7px solid #fff;
-  color: #fff;
-  opacity: 0;
-  pointer-events: none;
-  display: flex;
-  gap: 18px;
-  align-items: center;
-  z-index: 75;
-  text-shadow: 0 5px 0 rgba(0, 0, 0, 0.35);
-  white-space: nowrap;
-}
-.stamp.correct { background: linear-gradient(#49d46a, #1f9a3d); box-shadow: 0 0 50px rgba(124, 255, 138, 0.7), 0 12px 0 #14612a; }
-.stamp.wrong { background: linear-gradient(#ff5c7c, #c8123f); box-shadow: 0 0 50px rgba(255, 59, 92, 0.7), 0 12px 0 #7a1020; }
-.stamp.breach { background: linear-gradient(#e03a3a, #8c0f1a); box-shadow: 0 0 50px rgba(255, 59, 92, 0.8), 0 12px 0 #4f0810; }
-.stamp-icon { font-size: 70px; }
-.stamp.high { top: 150px; font-size: 64px; padding: 8px 40px; }
-.stamp.high .stamp-icon { font-size: 52px; }
+/* ---------------- banner / caption ---------------- */
 
 /* Message bar (bottom): banner.png as a 9-slice - js/ui.js _buildBar sets
    the border-image, its cap widths and the 160px height.  Centred horizontally on the stage.
@@ -485,7 +621,7 @@ button { font-family: inherit; }
   position: absolute;
   left: 50%;
   translate: -50% 0;
-  width: 1396px;
+  width: 1160px;
   bottom: 12px;
   border-style: solid;
   display: none;
@@ -498,8 +634,9 @@ button { font-family: inherit; }
 /* front view: narrower, so it sits between the hero (right edge x 470) and
    the stage's right half instead of over the hero */
 #stage[data-view="front"] .msgbar { width: 980px; }
-#stage[data-view="front"] .msgbar .banner-title { font-size: 38px; }
-#stage[data-view="front"] .msgbar .banner-text { font-size: 22px; }
+#stage[data-view="front"] .msgbar-line { font-size: 34px; }
+/* the intro's route map covers the stage: the bar stays above it */
+#stage.intro-on .msgbar { z-index: 112; }
 .msgbar-face {
   position: absolute;
   border-radius: 50%;
@@ -510,32 +647,35 @@ button { font-family: inherit; }
   background: #7a22e0 center / cover no-repeat;
   box-shadow: inset 0 3px 6px rgba(26, 6, 0, 0.45);
 }
+/* One sentence at a time (ZD.ui.guide).  All lines share one grid cell:
+   the outgoing line fades out where the incoming one rises in. */
 .msgbar-text {
   flex: 1;
   min-width: 0;
+  align-self: stretch;
+  display: grid;
+  align-items: center;
   padding: 0 26px 6px 22px;
   text-align: center;
   color: #fff;
 }
-.msgbar .banner-title {
+.msgbar-line {
+  grid-area: 1 / 1;
   font-family: var(--display);
-  font-size: 44px;
-  line-height: 1.05;
-  letter-spacing: 0.5px;
-  text-shadow: 0 3px 0 rgba(26, 15, 51, 0.7);
+  font-size: 38px;
+  line-height: 1.16;
+  letter-spacing: 0.4px;
+  white-space: nowrap; /* ONE line, always (ui._fitLine shrinks a long one) */
+  justify-self: center;
+  text-shadow: 0 3px 0 rgba(26, 15, 51, 0.75);
 }
-.msgbar .banner-text {
-  font-size: 25px;
-  font-weight: 800;
-  line-height: 1.2;
-  margin-top: 4px;
-  color: #f1e6ff;
-  text-shadow: 0 2px 0 rgba(26, 15, 51, 0.7);
-}
-.msgbar.title .banner-title { color: var(--yellow); }
-.msgbar.good .banner-title { color: var(--green); }
-.msgbar.alert .banner-title { color: var(--yellow); font-size: 46px; animation: bar-alert 0.6s ease-in-out infinite alternate; }
-@keyframes bar-alert { from { opacity: 1; } to { opacity: 0.55; } }
+.msgbar-line .w { display: inline-block; }
+/* key words (RUN, JUMP, the piece names...) */
+.msgbar-line .w.hl { color: var(--yellow); }
+.msgbar-line.alert { color: #ffe9a8; }
+.msgbar-line.alert .w.hl { color: #ff8a8a; }
+.msgbar-line.good .w.hl { color: var(--green); }
+.msgbar-line.bad .w.hl { color: var(--green); }
 
 /* ---------------- overlays / panels / buttons ---------------- */
 .overlay {
@@ -550,8 +690,6 @@ button { font-family: inherit; }
 .overlay.pass { pointer-events: none; }
 .overlay.pass > * { pointer-events: auto; }
 .overlay.pause, .overlay.complete { background: rgba(14, 8, 30, 0.78); }
-.overlay.gameover { background-size: cover; background-position: center; }
-.overlay.gameover::before { content: ''; position: absolute; inset: 0; background: rgba(20, 8, 40, 0.45); }
 
 .btn {
   font-family: var(--display);
@@ -740,7 +878,7 @@ button { font-family: inherit; }
 .go-body .lesson-main { justify-content: center; }
 .go-body .lesson-body { margin-top: 6px; }
 
-/* mission map (intro scene 3) */
+/* intro (js/intro.js): route map, demo hand, skip curtain */
 .mission-map {
   position: absolute;
   inset: 0;
@@ -750,70 +888,121 @@ button { font-family: inherit; }
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 44px;
+  gap: 52px;
+  padding-bottom: 150px; /* clear of the instruction bar */
 }
-.mission-map::before { content: ''; position: absolute; inset: 0; background: rgba(20, 8, 40, 0.55); }
-.map-chain { position: relative; display: flex; align-items: center; gap: 26px; }
+.mission-map::before { content: ''; position: absolute; inset: 0; background: rgba(20, 8, 40, 0.6); }
+.map-chain { position: relative; display: flex; align-items: flex-end; gap: 26px; }
 .map-item { display: flex; flex-direction: column; align-items: center; gap: 10px; font-family: var(--display); font-size: 32px; color: var(--yellow); text-shadow: 0 3px 0 #3a1a5c; }
-.map-wall { width: 160px; height: 170px; background-size: contain; background-repeat: no-repeat; background-position: center; filter: drop-shadow(0 10px 10px rgba(0, 0, 0, 0.5)); }
-.map-gate {
-  width: 180px;
-  height: 170px;
-  border-radius: 22px;
-  background: linear-gradient(#8fe38a, #2fbf4e);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 100px;
-  color: #fff;
-  border: 5px solid #fff;
-  box-shadow: 0 0 40px var(--green), 0 8px 0 #1f6b2d;
-}
-.map-arrow { font-size: 64px; color: #fff; text-shadow: 0 3px 8px rgba(0, 0, 0, 0.7); }
+.map-wall { width: 160px; height: 170px; background-size: contain; background-repeat: no-repeat; background-position: center bottom; filter: drop-shadow(0 10px 10px rgba(0, 0, 0, 0.5)); }
+.map-safe { width: 260px; height: 220px; background-size: contain; background-repeat: no-repeat; background-position: center bottom; filter: drop-shadow(0 10px 12px rgba(0, 0, 0, 0.5)); }
+.map-item.safe { color: var(--green); }
+.map-arrow { width: 52px; height: 52px; margin-bottom: 70px; color: #fff; filter: drop-shadow(0 3px 4px rgba(0, 0, 0, 0.6)); }
+.map-arrow svg { width: 100%; height: 100%; display: block; }
 .map-chain.many { gap: 12px; }
 .map-chain.many .map-wall { width: 130px; height: 140px; }
 .map-chain.many .map-item { font-size: 26px; }
-.map-chain.many .map-arrow { font-size: 40px; }
-.map-chain.many .map-gate { width: 150px; height: 140px; font-size: 80px; }
+.map-chain.many .map-arrow { width: 38px; height: 38px; margin-bottom: 58px; }
+.map-chain.many .map-safe { width: 220px; height: 190px; }
 .btn.start { position: relative; }
 
-/* settings (pause) */
-.settings { display: flex; flex-direction: column; gap: 14px; min-width: 560px; }
-.toggle {
-  display: flex;
-  justify-content: space-between;
-  font-size: 28px;
-  font-weight: 800;
-  padding: 14px 26px;
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.08);
-  border: 3px solid rgba(255, 255, 255, 0.22);
-  color: #fff;
-  cursor: pointer;
+/* the pointing hand that shows each action (its fingertip is its anchor;
+   moved by transform only) */
+.demo-hand {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 118px;
+  z-index: 114;
+  pointer-events: none !important;
+  will-change: transform, opacity;
+  filter: drop-shadow(0 8px 10px rgba(0, 0, 0, 0.45));
 }
-.toggle .state { font-family: var(--display); color: #ff8aa0; letter-spacing: 1px; }
-.toggle.on .state { color: var(--green); }
+.demo-hand svg { display: block; width: 100%; height: auto; }
+.demo-ring {
+  position: absolute;
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  border: 6px solid #fff;
+  z-index: 113;
+  pointer-events: none !important;
+}
+.intro-curtain { position: absolute; inset: 0; background: #140a26; z-index: 111; pointer-events: none !important; }
+/* during the intro's demo the answer buttons and the controller only
+   show what to press - taps do nothing */
+#stage.demo #options, #stage.demo #options *, #stage.demo #controls, #stage.demo #controls * { pointer-events: none !important; }
 
-/* mission complete */
-.stats { text-align: left; }
-.stat-walls { display: flex; gap: 14px; justify-content: center; margin-bottom: 18px; }
-.pip.big { width: 96px; height: 24px; }
-.stat-row { display: flex; justify-content: space-between; align-items: center; gap: 30px; font-size: 30px; padding: 10px 0; border-bottom: 2px solid rgba(255, 255, 255, 0.12); }
-.stat-row b { font-family: var(--display); font-size: 46px; color: var(--yellow); }
-.stat-row.concepts { align-items: flex-start; }
-.chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; max-width: 640px; }
-.chip { background: rgba(124, 255, 138, 0.18); border: 2px solid var(--green); border-radius: 30px; padding: 4px 14px; font-size: 20px; font-weight: 800; }
+/* pause: title + Resume only */
+.overlay.pause .panel { min-width: 520px; }
+.overlay.pause .btn { font-size: 44px; padding: 18px 70px; }
 
-.mission-name { margin: -6px 0 6px; font-size: 24px; font-weight: 900; color: #c59bff; letter-spacing: 0.5px; }
-.stat-row.mixups { align-items: flex-start; }
-.mixup-list { list-style: none; margin: 0; padding: 0; text-align: right; font-size: 23px; font-weight: 800; }
-.mixup-list li { display: flex; gap: 12px; justify-content: flex-end; align-items: baseline; padding: 3px 0; color: #ffd9e0; }
-.mixup-list b { font-family: var(--display); font-size: 26px; color: var(--yellow); }
-.mixup-none { font-size: 24px; font-weight: 800; color: #c7ffd8; }
+/* mission complete: title + Replay only */
+.overlay.complete .panel { min-width: 640px; }
+.overlay.complete .btn { font-size: 44px; padding: 18px 70px; }
 
-/* game over */
-.panel.gameover { min-width: 1000px; max-width: 1180px; }
-.go-body .lead { color: #ffd9e0; }
+/* game over (game.gameOver): the camera has pushed in on the boy and the
+   zombie; a dusk-purple shade, a soft burst of red rays behind the sign,
+   the GAME OVER sign, Replay under it - sign + button (493 + 22 + ~120 px)
+   centred on the stage as one block.  Shade + rays cover the same box as
+   #vignette so 20:9 screens are covered too. */
+.go-shade {
+  position: absolute;
+  left: -320px;
+  top: -300px;
+  width: 2560px;
+  height: 1700px;
+  opacity: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse 48% 50% at 50% 42%, rgba(46, 12, 78, 0) 30%, rgba(22, 6, 44, 0.62) 100%),
+    rgba(52, 18, 92, 0.48);
+}
+.go-rays {
+  position: absolute;
+  left: 50%;
+  top: 530px;
+  width: 1700px;
+  height: 1700px;
+  margin: -850px 0 0 -850px;
+  opacity: 0;
+  pointer-events: none;
+}
+.go-rays-spin {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle, rgba(255, 92, 44, 0.7) 0%, rgba(226, 40, 46, 0.34) 20%, rgba(200, 20, 50, 0) 46%),
+    repeating-conic-gradient(from 0deg, rgba(255, 104, 52, 0.34) 0deg 6deg, rgba(255, 104, 52, 0) 6deg 17deg);
+  -webkit-mask-image: radial-gradient(circle, #000 14%, rgba(0, 0, 0, 0) 60%);
+  mask-image: radial-gradient(circle, #000 14%, rgba(0, 0, 0, 0) 60%);
+  animation: go-spin 90s linear infinite;
+  will-change: transform;
+}
+@keyframes go-spin { to { transform: rotate(360deg); } }
+.go-sign {
+  position: absolute;
+  left: 50%;
+  top: 223px;
+  width: 880px;
+  margin-left: -440px;
+  opacity: 0;
+  pointer-events: none;
+  filter: drop-shadow(0 18px 22px rgba(12, 2, 26, 0.6));
+}
+.go-retry {
+  position: absolute;
+  left: 50%;
+  top: 738px;
+  translate: -50% 0;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  opacity: 0;
+}
+.go-retry-icon { display: flex; }
+.go-retry-icon svg { width: 52px; height: 52px; }
 
 /* loader + orientation */
 .loader-text { font-size: clamp(16px, 2vw, 24px); font-weight: 700; opacity: 0.8; }

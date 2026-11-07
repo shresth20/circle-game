@@ -38,7 +38,7 @@ LIMIT = {"noise": 2.0, "slide": 1.5, "ground": 1.0, "size": 3.0, "seam": 2.0}
 # sheets whose boots should not move (one-shots with steps - the side attack
 # lunges -, runs, leaps and deaths are excluded from the slide check)
 PLANTED = ("Idle", ".idle", "Throw", "front.attack", "Fear")
-NO_HEAD = (".die", ".dead", ".leap", "Leap")        # head turns over / leaves the frame
+NO_HEAD = (".die", ".dead", ".leap", "Leap", "Fall")   # head turns over / leaves the frame
 # Head noise is graded where the head should move little and smoothly (loops
 # and planted actions).  Head size spread includes ~1.5-2.5% measurement
 # noise on a moving head; front-view actions are not graded on it.  Jumps, cheers and hit recoils are large, fast,

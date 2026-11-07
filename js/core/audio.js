@@ -1,4 +1,4 @@
-/* Procedural sound effects + read-aloud.
+/* Procedural sound effects + read-aloud + looping theme music (assets/audio/theme-song.mp3).
    Every effect is synthesised with WebAudio, so the game needs no audio files
    and works offline.  say() is the read-aloud fallback used by I18n.say when
    no recorded clip exists (browser speech, in the current language). Replace any effect by editing the recipe in SFX below.
@@ -11,9 +11,15 @@ window.ZD = window.ZD || {};
   let master = null;
   let sfxBus = null;
   let ambientNodes = null;
+  /* Background theme: a looping music file, routed through the master gain
+     so mute / page-inactive silence it like every other sound. */
+  const MUSIC_SRC = 'assets/audio/theme-song.mp3';
+  const MUSIC_VOL = 0.35;
+  let musicEl = null;
+  let musicBus = null;
+  let musicOn = false;
   const state = {
     muted: ZD.prefs.get('muted', false),
-    voice: ZD.prefs.get('voice', true),
     active: !document.hidden,
     ready: false,
   };
@@ -211,6 +217,25 @@ window.ZD = window.ZD || {};
       [880, 1175, 1568].forEach((f, i) => tone({ type: 'sine', freq: f, dur: 0.16, vol: 0.1, delay: i * 0.06 }));
       noise({ dur: 0.35, vol: 0.08, filter: 'highpass', freq: 4000, attack: 0.05 });
     },
+    /* camera pushes in on the wall: a soft low swell */
+    focus: () => {
+      noise({ dur: 0.9, vol: 0.12, filter: 'lowpass', freq: 220, to: 900, q: 0.6, attack: 0.35 });
+      tone({ type: 'sine', freq: 110, to: 165, dur: 0.9, vol: 0.06, attack: 0.3 });
+    },
+    /* the window's rim lights switch on: a bright neon "tink" + buzz */
+    lights: () => {
+      tone({ type: 'triangle', freq: 1046, to: 1568, dur: 0.16, vol: 0.08 });
+      tone({ type: 'sawtooth', freq: 120, dur: 0.22, vol: 0.025, attack: 0.02 });
+      noise({ dur: 0.25, vol: 0.04, filter: 'highpass', freq: 5000, attack: 0.02 });
+    },
+    /* an answer is picked: a punchy lock-in on the window */
+    pick: () => {
+      tone({ type: 'sine', freq: 130, to: 60, dur: 0.16, vol: 0.22 });
+      tone({ type: 'square', freq: 660, to: 990, dur: 0.08, vol: 0.08 });
+      tone({ type: 'sine', freq: 1320, dur: 0.2, vol: 0.12, delay: 0.05 });
+    },
+    /* camera pulls back to the wide shot: a reversed whoosh */
+    pullback: () => noise({ dur: 0.5, vol: 0.16, filter: 'bandpass', freq: 1500, to: 320, q: 0.8, attack: 0.18 }),
     /* a piece hits the zombie (not the final knockout) */
     hit: () => {
       tone({ type: 'square', freq: 220, to: 90, dur: 0.16, vol: 0.2 });
@@ -221,16 +246,25 @@ window.ZD = window.ZD || {};
 
   /* ---- read-aloud (browser speech) ------------------------------------- */
   const speech = window.speechSynthesis || null;
+  /* Speaks `text`; resolves when it has been spoken (or cut off, or at once
+     when nothing is spoken) - never rejects.  The instruction bar waits on
+     it so a line is not replaced while it is still being read out. */
   function say(text) {
-    if (!speech || !text || state.muted || !state.active || !state.voice) return;
+    if (!speech || !text || state.muted || !state.active) return Promise.resolve();
     try {
       speech.cancel();
       const u = new SpeechSynthesisUtterance(text);
       u.lang = (window.I18n && I18n.langCode) || 'en-IN';
       u.rate = 0.95;
+      const done = new Promise((res) => {
+        u.onend = res;
+        u.onerror = res;
+      });
       speech.speak(u);
+      return done;
     } catch (e) {
       /* speech not available - captions are always on screen */
+      return Promise.resolve();
     }
   }
   function stopSpeech() {
@@ -286,6 +320,29 @@ window.ZD = window.ZD || {};
     }
   }
 
+  function music(on) {
+    musicOn = on;
+    if (!ensure()) return;
+    if (!musicEl) {
+      musicEl = new Audio(MUSIC_SRC);
+      musicEl.loop = true;
+      musicEl.preload = 'auto';
+      musicEl.addEventListener('error', () => console.warn('theme music missing:', MUSIC_SRC));
+      musicBus = ctx.createGain();
+      musicBus.gain.value = 0.0001;
+      ctx.createMediaElementSource(musicEl).connect(musicBus).connect(master);
+    }
+    if (on) {
+      if (state.active) musicEl.play().catch(() => {});
+      musicBus.gain.cancelScheduledValues(now());
+      musicBus.gain.setTargetAtTime(MUSIC_VOL, now(), 0.6);
+    } else {
+      musicBus.gain.setTargetAtTime(0.0001, now(), 0.3);
+      const el = musicEl;
+      setTimeout(() => !musicOn && el.pause(), 1500);
+    }
+  }
+
   const audio = {
     get muted() {
       return state.muted;
@@ -310,14 +367,6 @@ window.ZD = window.ZD || {};
       const fx = SFX[name];
       if (fx) fx();
     },
-    get voiceEnabled() {
-      return state.voice;
-    },
-    setVoice(on) {
-      state.voice = !!on;
-      ZD.prefs.set('voice', state.voice);
-      if (!on) stopSpeech();
-    },
     say,
     stopSpeech,
     setMuted(m) {
@@ -334,11 +383,14 @@ window.ZD = window.ZD || {};
       if (!ctx) return;
       if (on) {
         if (ctx.state === 'suspended') ctx.resume().catch(() => {});
-      } else if (ctx.state === 'running') {
-        ctx.suspend().catch(() => {});
+        if (musicOn && musicEl) musicEl.play().catch(() => {});
+      } else {
+        if (musicEl) musicEl.pause();
+        if (ctx.state === 'running') ctx.suspend().catch(() => {});
       }
     },
     ambient,
+    music,
   };
 
   ZD.audio = audio;

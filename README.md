@@ -30,25 +30,53 @@ segment - so every answer needs both a type and a size (random guess = 1 in 6). 
 never shuffled and use one neutral icon colour; colour appears only as
 feedback.
 
+**Front-view camera** (`FrontScene.frame` + `shots` in `js/scene.js`): the
+view sits in a camera rig that zooms and pans. Camera moves and view swings
+are Web Animations on transform / opacity only (compositor-driven, paused
+with the game via `ZD.clock.track`), and the views and the rig are always
+their own compositor layers (CSS `will-change`). This keeps them smooth and
+sharp, with no re-raster pop when a move ends. Coming from the side view,
+`camera.to('front', { shot: 'focus' })` is one continuous move: the view
+swings in and the camera glides straight on into the wall (`focus`: the wall
+fills the space left of the answer panel, a focus vignette darkens the
+edges). The opening's light-yellow neon rim lights then fade up
+(`GlassMech.lightUp`; the glows are separate small svgs, so they never
+repaint the zoomed view).
+When an answer is picked, the camera punches in on the window (`lock`) while
+the rim flares and the shape pings outward (`GlassMech.pick`). It then pulls
+back to the `wide` shot as the hero throws, follows the piece toward the
+wall (`impact`), and the view swings to the side at the window.
+
 * **Right piece** - it slips through the glass, the view switches to the
-  side, the zombie is knocked out, the window opens and the hero dives
-  through while the piece's name and rule are shown and read aloud (free
-  review), then runs to the next wall.  (`hits` > 1 on a wall would add
-  in-glass hits with new openings first; the shipped config uses 1.)
-* **Wrong piece** - it smashes the glass; the zombie dives through and knocks
-  the hero down (one heart lost, 3 per mission).  A lesson card then slides
-  the CORRECT piece into the gap (same orientation as the window), lights up
-  its parts (radii / chord / arc), shows a dashed "half" line for minor vs
-  major, and gives a one-line reason (read aloud).  "Got it!" asks the SAME
-  piece again in a different opening (new direction / size).
+  side, the zombie is knocked out and the window opens while the piece's
+  name and rule are shown and read aloud (free review).  Then the learner
+  takes the **run-and-jump controller** (icons only, no text): hold the
+  green RUN button (bottom-left) to run at the wall, tap the orange JUMP
+  button (bottom-right) to leap through the circle, and keep running to the
+  next wall (after wall 6: the safe zone), where the flow continues.  A jump
+  before the take-off zone is a small hop; running into the wall bumps off
+  it.  The button to press next pulses.  Keyboard: Right / D = run, Space /
+  Up / W = jump.  (`game.runAndJump`, `js/controls.js`.)  (`hits` > 1 on a
+  wall would add in-glass hits with new openings first; the shipped config
+  uses 1.)
+* **Wrong piece** - the answer panel marks the right piece; the thrown piece
+  smashes the glass and the zombie dives through and attacks.  The boy is
+  too frightened to fight back: he recoils, staggers and falls flat on his
+  back where he stood (`hero.sideFall`, no knockback), and stays down while
+  the zombie looms.  The camera pushes in on the two of them, the view dims
+  to purple, red rays open and the GAME OVER sign (`gameOverSign`, from
+  `assets/images/gameover.png`) drops in with a **Replay** button under it;
+  Replay zooms back out and plays the same wall again with a fresh zombie (walls already cleared stay
+  cleared).  One mistake ends the run - there are no hearts.
 * **Time out** - on timed walls the zombie climbs up behind the glass (the
   timer is its distance; the rim pulses red in the last 30%).  When it gets
-  there it bangs through: same as a wrong piece, and the lesson still shows.
-* **No hearts left** - cartoon defeat, the same lesson, then retry the wall.
+  there it bangs through: same as a wrong piece.
 
 Timers and difficulty per wall come from `rounds` in the config: walls 1-2
-clear sizes (none / 20 s), walls 3-4 rotated (15 / 14 s), walls 5-6 close to
-half (13 / 12 s).  The front view has no sun (it competed with the window).  The pause menu can switch the zombie timer off, plus
+clear sizes, walls 3-4 rotated, walls 5-6 close to half.  Every wall has a
+10 s timer, but it only appears after a thinking time (`delay`) that shrinks
+stage by stage: 5, 4, 3, 2, 1, 0 s.  During it the zombie waits behind the
+glass; answering inside it means no timer at all.  The front view has no sun (it competed with the window).  The pause menu can switch the zombie timer off, plus
 read-aloud, sound and reduced motion.
 
 Every answer is logged on the device (`localStorage` key `zd.log`, last 400):
@@ -57,7 +85,8 @@ mission-complete panel lists the top mix-ups ("Practise these"), and
 `ZD.report()` in the browser console prints a per-piece table for teachers.
 
 The intro shows both outcomes with the same code (`ZD.game.sideThrowDemo`,
-`zombieBreakIn`, `securityReset`, `heroJumpThrough`).  Leaps use
+`zombieBreakIn`, `heroJumpThrough`); after the boy falls, the scene dips to
+dark and resets for the right piece.  Leaps use
 `SideScene.leapThrough` plus a wall "cover" layer so whatever has passed the
 wall is hidden by bricks and seen only through the hole.
 
@@ -81,7 +110,9 @@ js/
                            grove / outpost / rocky / wild) so the land keeps
                            changing between walls instead of resetting
   ui.js                    HUD, six-button answer panel, stamps, panels, bottom message bar
+  controls.js              run-and-jump controller: RUN (hold) / JUMP (tap) buttons + keys
   learn.js                 lesson card: correct piece fills the gap + reason
+                           (not shown at the moment: a mistake ends the run)
   intro.js                 title + 3-scene cinematic
   game.js                  state machine (wall loop, outcomes, finale)
   main.js                  boot + viewport fitting
@@ -150,7 +181,13 @@ the way video stabilisation does:
 
 The hero keeps the anchor where the old build had it (measured on the idle
 sheets: about 1 px from the boots, feet 8–11 px below the line), so the
-game's hand/core offsets still hold. Every hero and zombie sheet carries a
+game's hand/core offsets still hold. Sheets the generator drew at another
+size are scaled to the idle sheet's size (`HERO_SCALE`: fear ×0.915, fall
+×1.10, checked on head width and standing height). The fall sheet
+(`boy/image.png` → `hero.sideFall`) can't be head-tracked because the head
+turns over, so `build_hero_fall` registers it on the ground contact: each
+grid row keeps its own motion, and the rows are joined where the front of the
+boots meets. Every hero and zombie sheet carries a
 fixed `shadowW`, so the shadow doesn't change size when the animation does.
 
 At runtime (`js/core/sprites.js`) each frame is held for a whole number of
@@ -210,7 +247,7 @@ All learning content is data in `js/config/missions.js` (the file header
 documents every field):
 
 ```js
-rounds: [{ tier: 'start', timer: null }, { tier: 'start', timer: 20 }, ...],  // one per wall
+rounds: [{ tier: 'start', timer: 10, delay: 5 }, { tier: 'start', timer: 10, delay: 4 }, ...],  // one per wall
 openings: { start: tier([90], [270], [-90, 90, 0, 180]), middle: ..., hard: ... }
 ```
 

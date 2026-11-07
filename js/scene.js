@@ -11,18 +11,38 @@
 window.ZD = window.ZD || {};
 
 (function () {
-  const { el, svg, rand, randInt, pick, clamp } = ZD.util;
+  const { el, svg, rand, randInt, pick, clamp, wait } = ZD.util;
   const A = ZD.assets;
 
   const STAGE_W = 1920;
+  // one zombie footstep (ms): the walk's bounce and step sounds, both views
+  const ZOMBIE_STEP_MS = 520;
+  /* The boy's run (hero.sideRun, 12 frames = two strides) is driven by the
+     distance covered, not by time: each frame is RUN_FRAME_PX of road, so the
+     planted foot keeps pace with the road at any speed (speeding up, braking,
+     camera catching up).  The legs sweep ~175 sheet px per stance plus a
+     flight phase, i.e. ~260 stage px per stride at the side view's scale.
+     At HERO_RUN_SPEED that is ~16 frames a second. */
+  const RUN_FRAME_PX = 43;
+  const HERO_RUN_SPEED = 690; // px/s, full running speed (side view)
+  const RUN_CONTACT = [5, 10]; // frames where a foot lands (step sound + dust)
   const STAGE_H = 1080;
-  // finale building; door / plaque boxes are in the built image's pixels
+  /* Finale building (assets/images/safe-zone.png): a watchtower and walls
+     with an open gateway and a lit corridor inside.  Boxes are in the built
+     image's pixels.  Sized from the boy, not the screen: the gateway is
+     ~1.2x his height (a ~270 px boy, a ~330 px opening), so the top of the
+     watchtower runs off the top of the screen - a big building up close. */
   const SAFE_ZONE = {
-    scale: 0.78,
-    left: 600, // stage x of the building's left edge at rest
-    sink: 34, // base blocks stand on the road's top surface
-    door: { x: 1243, y: 390, w: 150, h: 422 },
-    plaque: { x: 621, y: 499, w: 370, h: 85 },
+    scale: 1.1,
+    left: 300, // stage x of the building's left edge at rest
+    floorY: 859, // front edge of the gateway floor: the hero's feet at the threshold
+    opening: { x: 797, y: 562, w: 240, h: 297 }, // the open gateway
+    gate: { x: 744, y: 554, w: 351, h: 306 }, // doorway between the striped pillars: the sliding gate
+    // the doorway's bevelled top corners (built px): left (744,590)-(780,554), right (1058,554)-(1095,592)
+    gateBevel: { l: [36, 36], r: [37, 38] }, // [run along the top, drop down the side]
+    inner: { x: 919, y: 722, w: 65, h: 77 }, // the door at the far end of the corridor
+    innerScale: 0.36, // the boy's size at that door, relative to the threshold
+    plaque: { x: 834, y: 429, w: 287, h: 60 }, // the "SAFE ZONE" lettering
   };
   const WORLD_W = 2560; // scenery is wider than the stage so 20:9 screens stay filled
   const WORLD_X = (STAGE_W - WORLD_W) / 2; // -320
@@ -45,7 +65,7 @@ window.ZD = window.ZD || {};
 
   /* One sun, drawn here: the skyline art's own sun repeated with every tile. */
   function sunLayer({ x, y, d, factor }) {
-    const node = el('div', { class: 'layer sun far', style: { left: x - d / 2 + 'px', top: y - d / 2 + 'px', width: d + 'px', height: d + 'px', zIndex: 3 } });
+    const node = el('div', { class: 'layer sun far', style: { left: x - d / 2 + 'px', top: y - d / 2 + 'px', width: d + 'px', height: d + 'px', zIndex: 3, willChange: scrollLayer(factor) } });
     return { node, factor, tiled: false, x: x - d / 2, w: d };
   }
 
@@ -58,10 +78,40 @@ window.ZD = window.ZD || {};
      the one place to tune the game's overall animation timing. */
   const settings = {};
   const D = (ms) => ms;
-  // forget the setting from the removed reduced-motion option
-  try { localStorage.removeItem('zd.reducedMotion'); } catch (e) {}
+
+  /* CSS easings for the compositor camera moves (Web Animations), named
+     like the anime.js ones they replace.  glide = a long camera move: soft
+     start, long gentle landing. */
+  const CAM_EASE = {
+    linear: 'linear',
+    easeInQuad: 'cubic-bezier(0.11, 0, 0.5, 0)',
+    easeOutQuad: 'cubic-bezier(0.5, 1, 0.89, 1)',
+    easeOutCubic: 'cubic-bezier(0.33, 1, 0.68, 1)',
+    easeInOutCubic: 'cubic-bezier(0.65, 0, 0.35, 1)',
+    easeInOutSine: 'cubic-bezier(0.37, 0, 0.63, 1)',
+    glide: 'cubic-bezier(0.42, 0, 0.18, 1)',
+  };
+  const camXf = (c) => `translate(${c.x}px, ${c.y}px) scale(${c.s})`;
+  /* resolves when a Web Animation finishes or is cancelled (never rejects) */
+  const animDone = (a) => new Promise((res) => {
+    a.addEventListener('finish', res, { once: true });
+    a.addEventListener('cancel', res, { once: true });
+  });
+  // forget settings from removed options (reduced motion; pause-menu
+  // read-aloud and zombie-timer switches - both are always on now)
+  try {
+    ['zd.reducedMotion', 'zd.voice', 'zd.timer'].forEach((k) => localStorage.removeItem(k));
+  } catch (e) {}
 
   let uid = 0;
+
+  /* A layer that setScroll moves every frame (factor != 0) gets its own
+     compositor layer, so the scroll is a compositor move.  Without it
+     Chrome merges the moving strips (road, dirt, mountains...) into one
+     huge "overlap" layer and repaints it every frame; it can't keep up and
+     draws that layer empty on some frames - the scene flickers and the
+     road / ground blink pink. */
+  const scrollLayer = (factor) => (factor ? 'transform' : '');
 
   /* ----------------------------------------------------------------------- */
   /* layers                                                                  */
@@ -80,7 +130,7 @@ window.ZD = window.ZD || {};
     const count = Math.ceil((WORLD_W + period) / tileW) + 1;
     const node = el('div', {
       class: 'layer tiled ' + cls,
-      style: { left: WORLD_X + 'px', top: y + 'px', width: tileW * count + 'px', height: height + 'px', zIndex: z, opacity, backgroundColor: bg || 'transparent' },
+      style: { left: WORLD_X + 'px', top: y + 'px', width: tileW * count + 'px', height: height + 'px', zIndex: z, opacity, backgroundColor: bg || 'transparent', willChange: scrollLayer(factor) },
     });
     for (let i = 0; i < count; i++) {
       node.appendChild(
@@ -124,6 +174,7 @@ window.ZD = window.ZD || {};
         backgroundImage: `url("${A.imageUrl(key)}")`,
         backgroundSize: '100% 100%',
         transform: flip ? 'scaleX(-1)' : '',
+        willChange: scrollLayer(factor),
       },
     });
     return { node, factor, tiled: false, x, w };
@@ -301,6 +352,29 @@ window.ZD = window.ZD || {};
           return { gap, item: rock ? { key: rnd.pick(ROCK_S), y: road.back + 14 + rnd.range(-2, 3), scale: rnd.range(0.34, 0.46), flip: rnd.chance(0.5) } : { key: rnd.pick(GRASS_S), y: road.back + 14 + rnd.range(-2, 3), scale: rnd.range(0.42, 0.56), flip: rnd.chance(0.5) } };
         },
       }),
+      /* small pebbles and grass tufts lying ON the brick road (its top
+         surface, back edge to front edge), smaller toward the far edge;
+         drawn under the characters and the walls, so the hero runs over
+         them.  Now and then a second pebble or tuft sits right beside the
+         first (gap 14-34 px), so they read as natural clutter, not a grid. */
+      surface: new Scatter({
+        factor: 1, z: 9, cls: 'road-litter', seed: 61,
+        gen: (rnd, x, b) => {
+          let gap = gapOf(rnd, { home: [110, 290], grove: [100, 270], outpost: [110, 290], rocky: [75, 210], wild: [80, 220] }, b);
+          if (rnd.chance(0.16)) gap = rnd.range(14, 34); // a little cluster
+          const y = rnd.range(road.back + 12, road.front - 4);
+          const k = 0.78 + 0.22 * (y - road.back) / (road.front - road.back); // depth
+          const flip = rnd.chance(0.5);
+          const grass = rnd.chance({ rocky: 0.28, wild: 0.6, grove: 0.55 }[b] || 0.45);
+          if (grass) {
+            const key = rnd.pick(['grass6', 'grass7', 'grass7']);
+            return { gap, item: { key, y: y + 3, scale: rnd.range(0.45, 0.68) * k, flip } };
+          }
+          const key = rnd.pick(['rock8', 'rock8', 'rock7', 'rock7', 'rock6']);
+          const base = { rock8: [0.45, 0.72], rock7: [0.38, 0.56], rock6: [0.3, 0.42] }[key];
+          return { gap, item: { key, y: y + 2, scale: rnd.range(...base) * k, flip } };
+        },
+      }),
       // the dirt verge below the road
       verge: new Scatter({
         factor: 1, z: 9, seed: 41,
@@ -387,13 +461,26 @@ window.ZD = window.ZD || {};
       this.rot = o.rot || 0;
       const R = this.r;
       const pad = 6;
-      this.svg = svg('svg', {
-        class: 'glass',
-        viewBox: `${-R - pad} ${-R - pad} ${2 * (R + pad)} ${2 * (R + pad)}`,
-        width: 2 * (R + pad),
-        height: 2 * (R + pad),
-        style: { left: this.cx - R - pad + 'px', top: this.cy - R - pad + 'px', transform: `rotate(${this.rot}deg) scaleX(${this.squash})` },
-      });
+      this._baseXf = `rotate(${this.rot}deg) scaleX(${this.squash})`;
+      /* One svg per layer, all on the same circle: the glass itself, plus
+         the rim lights, the pick ping and the danger ring in small svgs of
+         their own, so their glow animations are compositor opacity /
+         transform changes of a whole element - never a repaint of blurred
+         paths inside the zoomed view every frame. */
+      const layer = (cls, p) =>
+        svg('svg', {
+          class: cls,
+          viewBox: `${-R - p} ${-R - p} ${2 * (R + p)} ${2 * (R + p)}`,
+          width: 2 * (R + p),
+          height: 2 * (R + p),
+          style: { left: this.cx - R - p + 'px', top: this.cy - R - p + 'px', transform: this._baseXf },
+        });
+      const glowFilter = (id) => {
+        const f = svg('filter', { id, x: '-30%', y: '-30%', width: '160%', height: '160%' });
+        f.append(svg('feGaussianBlur', { stdDeviation: '4', result: 'b' }), svg('feMerge', {}, [svg('feMergeNode', { in: 'b' }), svg('feMergeNode', { in: 'SourceGraphic' })]));
+        return f;
+      };
+      this.svg = layer('glass', pad);
       const defs = svg('defs');
       const grad = svg('radialGradient', { id: this.id + '-g', cx: '35%', cy: '30%', r: '80%' });
       grad.append(
@@ -404,9 +491,7 @@ window.ZD = window.ZD || {};
       const mask = svg('mask', { id: this.id + '-m' });
       this.cut = svg('path', { d: '', fill: 'black' });
       mask.append(svg('rect', { x: -R - pad, y: -R - pad, width: 2 * (R + pad), height: 2 * (R + pad), fill: 'white' }), this.cut);
-      const glow = svg('filter', { id: this.id + '-glow', x: '-30%', y: '-30%', width: '160%', height: '160%' });
-      glow.append(svg('feGaussianBlur', { stdDeviation: '4', result: 'b' }), svg('feMerge', {}, [svg('feMergeNode', { in: 'b' }), svg('feMergeNode', { in: 'SourceGraphic' })]));
-      defs.append(grad, mask, glow);
+      defs.append(grad, mask, glowFilter(this.id + '-glow'));
 
       this.gGlass = svg('g', { mask: `url(#${this.id}-m)` });
       this.disc = svg('circle', { r: R + 2, fill: `url(#${this.id}-g)`, class: 'glass-disc' });
@@ -416,38 +501,104 @@ window.ZD = window.ZD || {};
       this.gGlass.append(this.disc, this.shine, this.shine2, this.tint);
 
       // the opening: a light dark tint (the zombie behind must stay visible -
-      // it is the timer) + a dark edge under a solid bright outline, so even
-      // a thin arc reads clearly against the glass
+      // it is the timer) + a dark edge under the rim lights, so even a thin
+      // arc reads clearly against the glass
       this.openShadow = svg('path', { d: '', fill: '#120a2a', opacity: '0.3' });
-      this.edge = svg('path', { d: '', class: 'glass-edge', fill: 'none', stroke: '#1a0a2e', 'stroke-width': 11, 'stroke-linejoin': 'round', opacity: '0.85' });
-      this.outline = svg('path', { d: '', class: 'glass-outline', fill: 'none', stroke: '#ffd166', 'stroke-width': 5, 'stroke-linejoin': 'round', filter: `url(#${this.id}-glow)` });
+      this.edge = svg('path', { d: '', class: 'glass-edge', fill: 'none', stroke: '#1a0a2e', 'stroke-width': 12, 'stroke-linejoin': 'round', opacity: '0.85' });
       this.center = svg('circle', { r: 4.5, fill: '#ffe08a', stroke: '#5b2a86', 'stroke-width': 2, class: 'glass-center' });
       this.cracks = svg('g', { class: 'cracks', filter: `url(#${this.id}-glow)` });
       this.rim = svg('circle', { r: R - 1, fill: 'none', stroke: '#ffffff', 'stroke-opacity': '0.25', 'stroke-width': 2 });
       this.lock = svg('circle', { r: R + 3, fill: 'none', stroke: '#7CFF8A', 'stroke-width': 5, opacity: '0', class: 'glass-lock' });
-      // zombie timer: the rim pulses red in the last seconds
-      this.danger = svg('circle', { r: R + 1, fill: 'none', stroke: '#ff3b5c', 'stroke-width': 8, class: 'glass-danger' });
       // (the shadow only covers the cut-out area, so it can sit above the glass)
-      this.gOpen = svg('g', { class: 'glass-open' }, [this.openShadow, this.edge, this.outline]);
-      this.svg.append(defs, this.gGlass, this.gOpen, this.center, this.cracks, this.rim, this.danger, this.lock);
-      this.el = this.svg;
+      this.gOpen = svg('g', { class: 'glass-open' }, [this.openShadow, this.edge]);
+      this.svg.append(defs, this.gGlass, this.gOpen, this.center, this.cracks, this.rim, this.lock);
+
+      // zombie timer: the rim pulses red in the last seconds
+      this.dangerSvg = layer('glass glass-danger-layer', pad);
+      this.danger = svg('circle', { r: R + 1, fill: 'none', stroke: '#ff3b5c', 'stroke-width': 8 });
+      this.dangerSvg.append(this.danger);
+
+      /* Rim lights: a light-yellow neon tube.  A wide soft bloom (its own
+         svg, which breathes slowly - CSS opacity animation of the element),
+         the tube and a bright filament. */
+      const LP = 40; // room for the bloom
+      this.haloSvg = layer('glass glass-halo-layer', LP);
+      const bloom = svg('filter', { id: this.id + '-bloom', x: '-40%', y: '-40%', width: '180%', height: '180%' });
+      bloom.append(svg('feGaussianBlur', { stdDeviation: '9' }));
+      this.halo = svg('path', { d: '', class: 'glass-halo', fill: 'none', stroke: '#ffe45a', 'stroke-width': 22, 'stroke-linejoin': 'round', filter: `url(#${this.id}-bloom)` });
+      this.haloSvg.append(svg('defs', {}, [bloom]), this.halo);
+      this.tubeSvg = layer('glass glass-tube-layer', LP);
+      this.outline = svg('path', { d: '', class: 'glass-outline', fill: 'none', stroke: '#fff07e', 'stroke-width': 6, 'stroke-linejoin': 'round', filter: `url(#${this.id}-glow2)` });
+      this.filament = svg('path', { d: '', class: 'glass-filament', fill: 'none', stroke: '#fffbe0', 'stroke-width': 2, 'stroke-linejoin': 'round' });
+      this.tubeSvg.append(svg('defs', {}, [glowFilter(this.id + '-glow2')]), this.outline, this.filament);
+      this.lights = el('div', { class: 'glass-lights' }, [this.haloSvg, this.tubeSvg]);
+
+      // an answer was picked: a copy of the opening pings outward
+      this.pingSvg = layer('glass glass-ping-layer', LP);
+      this.ping = svg('path', { d: '', class: 'glass-ping', fill: 'none', stroke: '#fff3a0', 'stroke-width': 5, 'stroke-linejoin': 'round' });
+      this.pingSvg.append(this.ping);
+
+      this.el = el('div', { class: 'glass-wrap' }, [this.svg, this.dangerSvg, this.lights, this.pingSvg]);
+      this._lightAnim = null;
+      this._pingAnim = null;
       this.spec = null;
+    }
+
+    get _openParts() {
+      return [this.lights, this.edge, this.openShadow];
     }
 
     setTarget(spec) {
       this.spec = spec;
       const d = spec ? ZD.geo.piecePath(spec, 0, 0, this.r) : '';
-      this.cut.setAttribute('d', d);
-      this.outline.setAttribute('d', d);
-      this.edge.setAttribute('d', d);
-      this.openShadow.setAttribute('d', d);
-      this.outline.classList.remove('locked', 'good', 'bad');
-      [this.outline, this.edge, this.openShadow].forEach((n) => (n.style.display = spec ? '' : 'none'));
+      [this.cut, this.halo, this.outline, this.filament, this.edge, this.openShadow, this.ping].forEach((n) => n.setAttribute('d', d));
+      this.highlight('idle');
+      this._openParts.forEach((n) => (n.style.display = spec ? '' : 'none'));
+    }
+
+    /* Rim lights dark until lightUp() (restore() turns them back on). */
+    lightsOff() {
+      if (this._lightAnim) this._lightAnim.cancel();
+      this._lightAnim = null;
+      this.lights.style.opacity = '0';
+    }
+
+    /* The question is asked: the rim lights fade up smoothly (compositor
+       opacity animation; the bloom's slow breathing is CSS). */
+    lightUp() {
+      if (!this.spec) return;
+      ZD.audio.play('lights');
+      if (this._lightAnim) this._lightAnim.cancel();
+      const from = parseFloat(getComputedStyle(this.lights).opacity) || 0;
+      const a = this.lights.animate([{ opacity: from }, { opacity: 1 }], { duration: D(520), easing: CAM_EASE.easeOutQuad, fill: 'both' });
+      ZD.clock.track(a);
+      this._lightAnim = a;
+      a.onfinish = () => {
+        if (this._lightAnim !== a) return;
+        this.lights.style.opacity = '';
+        a.cancel();
+        this._lightAnim = null;
+      };
+    }
+
+    /* An answer was picked: the rim lights flare white-yellow and the
+       opening's shape pings outward from the window (compositor transform
+       + opacity of the ping's own svg). */
+    pick() {
+      if (!this.spec) return;
+      this.highlight('picked');
+      if (this._pingAnim) this._pingAnim.cancel();
+      const b = this._baseXf;
+      this._pingAnim = this.pingSvg.animate(
+        [{ opacity: 0.95, transform: `${b} scale(1)` }, { opacity: 0, transform: `${b} scale(1.22)` }],
+        { duration: D(520), easing: CAM_EASE.easeOutCubic }
+      );
+      ZD.clock.track(this._pingAnim);
     }
 
     /* Danger pulse on the rim (zombie timer running out). */
     setDanger(on) {
-      this.svg.classList.toggle('danger', !!on);
+      this.el.classList.toggle('danger', !!on);
     }
 
     /* The glass reseals with a NEW opening: old cracks fade, a shimmer ring
@@ -462,12 +613,11 @@ window.ZD = window.ZD || {};
       await anime({ targets: this.gOpen, opacity: [0, 1], duration: D(420), delay: D(120), easing: 'easeOutQuad' }).finished;
     }
 
-    /* 'approach' | 'good' | 'bad' | 'idle' */
+    /* 'picked' | 'approach' | 'good' | 'bad' | 'idle' (rim-light colour) */
     highlight(state) {
-      this.outline.classList.remove('locked', 'good', 'bad');
-      if (state === 'approach') this.outline.classList.add('locked');
-      if (state === 'good') this.outline.classList.add('good');
-      if (state === 'bad') this.outline.classList.add('bad');
+      this.lights.classList.remove('picked', 'locked', 'good', 'bad');
+      const cls = { picked: 'picked', approach: 'locked', good: 'good', bad: 'bad' }[state];
+      if (cls) this.lights.classList.add(cls);
     }
 
     /* Red glowing cracks spreading from (px,py) in local glass coordinates. */
@@ -519,13 +669,13 @@ window.ZD = window.ZD || {};
     shatter() {
       this.svg.classList.add('shattered');
       anime({ targets: [this.gGlass, this.cracks, this.rim, this.center], opacity: 0, duration: D(250), easing: 'linear' });
-      [this.outline, this.edge, this.openShadow].forEach((n) => (n.style.display = 'none'));
+      this._openParts.forEach((n) => (n.style.display = 'none'));
       this.setDanger(false);
     }
 
     /* Mechanism unlocks after a correct hit: glass turns green and dissolves. */
     async unlock() {
-      [this.outline, this.edge, this.openShadow].forEach((n) => (n.style.display = 'none'));
+      this._openParts.forEach((n) => (n.style.display = 'none'));
       this.setDanger(false);
       this.cut.setAttribute('d', '');
       await anime({ targets: this.lock, opacity: [0, 1], scale: [1, 1.08], duration: D(420), easing: 'easeOutCubic' }).finished;
@@ -534,7 +684,8 @@ window.ZD = window.ZD || {};
     }
 
     restore() {
-      this.svg.classList.remove('cracked', 'shattered', 'danger');
+      this.svg.classList.remove('cracked', 'shattered');
+      this.el.classList.remove('danger');
       this.cracks.innerHTML = '';
       [this.gGlass, this.cracks, this.rim, this.center].forEach((n) => {
         n.style.opacity = '';
@@ -542,6 +693,9 @@ window.ZD = window.ZD || {};
       });
       anime.remove(this.gOpen);
       this.gOpen.style.opacity = '';
+      [this._lightAnim, this._pingAnim].forEach((a) => a && a.cancel());
+      this._lightAnim = this._pingAnim = null;
+      this.lights.style.opacity = '';
       this.tint.setAttribute('opacity', '0');
       this.tint.style.opacity = '';
       this.lock.setAttribute('opacity', '0');
@@ -699,11 +853,23 @@ window.ZD = window.ZD || {};
       anime({ targets: g, opacity: [0, 1, 1, 0], duration: dur, easing: 'linear', complete: () => g.remove() });
       return g;
     },
+    /* Full-screen colour wash: ramps up in ~70 ms and fades out (an instant
+       jump to full strength reads as a strobe / flicker).  Compositor
+       opacity animation. */
     flash(color = '#ffffff', dur = 260, maxOpacity = 0.7) {
       const f = document.getElementById('flash');
+      if (fx._flash) fx._flash.cancel();
       f.style.background = color;
-      anime.remove(f);
-      anime({ targets: f, opacity: [maxOpacity, 0], duration: D(dur), easing: 'easeOutQuad' });
+      const rise = 70;
+      fx._flash = f.animate(
+        [
+          { opacity: 0, easing: 'ease-out' },
+          { opacity: maxOpacity * 0.8, offset: rise / (rise + dur), easing: CAM_EASE.easeOutQuad },
+          { opacity: 0 },
+        ],
+        { duration: D(rise + dur) }
+      );
+      ZD.clock.track(fx._flash);
     },
     shake(intensity = 10, dur = 420) {
       const w = document.getElementById('world');
@@ -815,6 +981,7 @@ window.ZD = window.ZD || {};
       const wh = Math.round(wall.h * this.wallScale);
       const wx = Math.round(960 - ww / 2);
       const wy = WALL_BASE_Y - wh;
+      this.wallRect = { x: wx, y: wy, w: ww, h: wh };
       this.hole = { x: wx + wall.hole.cx * this.wallScale, y: wy + wall.hole.cy * this.wallScale };
       // the glass reaches 2px under the opening's edge so it sits flush on the
       // bricks (no dark gap from the art's outline around the hole)
@@ -829,15 +996,20 @@ window.ZD = window.ZD || {};
         fore.appendChild(propLayer(k, { x, y, scale: sc, z: 13 }).node);
       });
 
-      // zombie waits behind the wall, visible through the opening.  Its
-      // distance from the glass is the timer: ZPOSE.far (head just above the
-      // sill) -> ZPOSE.near (face pressed to the glass); see zombieClimb().
+      // zombie behind the wall, seen through the opening, walking towards
+      // it: zpose.start (far off, small) -> zpose.far (where the timer
+      // starts) -> zpose.near (face pressed to the glass).  Further away =
+      // smaller and its feet higher; close up its feet drop below the sill.
+      // See zombieWalkUp() / zombieClimb().
       this.zombie = new ZD.Sprite({ className: 'char-zombie behind', zIndex: 10 });
       this.zombie.setSheet('zombie.front.idle');
+      // Sizes x1.16 (the side view's zombieScale 1.38 -> 1.6), so at the
+      // glass it stands as tall as the boy in the foreground, not smaller.
       this.zpose = {
-        far: { y: this.hole.y + this.R * 1.55, s: 0.92 },
-        mid: { y: this.hole.y + this.R * 1.05, s: 1.1 },
-        near: { y: this.hole.y + this.R * 1.14, s: 1.85 },
+        start: { y: this.hole.y + this.R * 0.75, s: 0.6 },
+        far: { y: this.hole.y + this.R * 0.98, s: 0.85 },
+        mid: { y: this.hole.y + this.R * 1.05, s: 1.28 },
+        near: { y: this.hole.y + this.R * 1.14, s: 2.15 },
       };
       this._placeZombie(this.zpose.mid, 0);
       this.el.appendChild(this.zombie.el);
@@ -872,6 +1044,136 @@ window.ZD = window.ZD || {};
       this.fxLayer = el('div', { class: 'fx', style: { zIndex: 30 } });
       this.el.appendChild(this.fxLayer);
       this.setScroll(0);
+
+      /* Camera rig: everything above moves into one box that the camera
+         zooms and pans (Camera.to still swings the whole view).  The focus
+         vignette sits outside the rig, so it stays put on screen and leaves
+         with the view. */
+      this.rig = el('div', { class: 'cam-rig' });
+      while (this.el.firstChild) this.rig.appendChild(this.el.firstChild);
+      this.focusVig = el('div', { class: 'focus-vignette' });
+      this.el.append(this.rig, this.focusVig);
+      /* Shots: zoom `s`, framing the window centre at screen point `on`;
+         `vig` = how dark the focus vignette gets.
+           enter   the view swinging in from the side view: a little wider
+                   than wide (the old 0.92 view zoom), so side -> front ->
+                   focus is ONE continuous push-in
+           wide    the whole view: hero in front, wall down the road
+           focus   asking: the wall fills the space left of the answer
+                   panel, the hero's head and shoulders stay in shot
+           lock    an answer was picked: a quick punch-in on the window
+           impact  the piece is in the air: the camera rides with it */
+      const H = this.hole;
+      const onFocus = { x: H.x - 70, y: H.y + 34 };
+      const ENTER = 0.92; // about the stage centre, like the old view zoom
+      this.shots = {
+        enter: { s: ENTER, on: { x: 960 + (H.x - 960) * ENTER, y: 540 + (H.y - 540) * ENTER }, vig: 0 },
+        wide: { s: 1, on: { x: H.x, y: H.y }, vig: 0 },
+        focus: { s: 1.2, on: onFocus, vig: 1 },
+        lock: { s: 1.3, on: onFocus, vig: 1 },
+        impact: { s: 1.12, on: { x: H.x, y: H.y }, vig: 0.55 },
+      };
+      // vignette centred on the window as framed while focused
+      // (#world-sized box: 2560 x 1700 from (-320, -300), as #vignette)
+      this.focusVig.style.background = `radial-gradient(ellipse 820px 600px at ${onFocus.x + 320}px ${onFocus.y + 300}px, rgba(14, 4, 34, 0) 42%, rgba(14, 4, 34, 0.62) 100%)`;
+      this.cam = this._shotState('wide');
+      this._camAnims = null; // running Web Animations [rig, vignette]
+      this._camDone = null;
+      this.frame('wide', { duration: 0 });
+    }
+
+    /* ---- camera rig ----
+       A shot is reached with ONE Web Animation of the rig's transform
+       (translate + scale, origin 0 0) plus one of the vignette's opacity.
+       They run on the compositor, so the move stays smooth whatever the
+       main thread is doing, and Chrome rasterises the rig at the move's
+       largest zoom up front (no blurry stretch, no re-raster pop at the
+       end).  The rig keeps its own compositor layer for good (CSS
+       will-change), so starting / ending a move never changes the layer
+       setup.  A new shot takes over from wherever the camera is (sampled
+       from the running animation), so shots chain or cut short without a
+       jump.  Paused with the game (ZD.clock.track).  Resolves when the
+       shot is reached or superseded.
+       opts: duration (0 = cut), easing (CAM_EASE key or CSS easing),
+             delay, from (start from that shot instead of the current view) */
+    frame(name, { duration = 900, easing = 'easeInOutCubic', delay = 0, from = null } = {}) {
+      const to = this._shotState(name);
+      const start = from ? this._shotState(from) : this._camNow();
+      this._stopCam();
+      this.shot = name;
+      this._setCam(duration ? start : to);
+      if (!duration) return Promise.resolve();
+      const opts = { duration: D(duration), delay: D(delay), easing: CAM_EASE[easing] || easing, fill: 'both' };
+      const a = this.rig.animate([{ transform: camXf(start) }, { transform: camXf(to) }], opts);
+      const v = this.focusVig.animate([{ opacity: start.vig }, { opacity: to.vig }], opts);
+      [a, v].forEach((x) => ZD.clock.track(x));
+      this._camAnims = [a, v];
+      this._camFrom = start;
+      this._camTo = to;
+      return new Promise((resolve) => {
+        const done = () => {
+          if (this._camDone !== done) return;
+          this._camDone = null;
+          resolve();
+        };
+        this._camDone = done;
+        a.onfinish = () => {
+          if (!this._camAnims || this._camAnims[0] !== a) return;
+          // hand the end state to the inline style, then drop the animations
+          // (same values: nothing moves, nothing is re-rasterised)
+          this._setCam(to);
+          this._camAnims.forEach((x) => x.cancel());
+          this._camAnims = null;
+          done();
+        };
+      });
+    }
+
+    /* the wall's box in stage px as framed by shot `name` (the rig is
+       translate + scale about 0 0) - the answer panel lines up with it */
+    wallInShot(name) {
+      const c = this._shotState(name);
+      const r = this.wallRect;
+      return { x: c.x + c.s * r.x, y: c.y + c.s * r.y, w: c.s * r.w, h: c.s * r.h };
+    }
+
+    _shotState(name) {
+      const sh = this.shots[name];
+      return { s: sh.s, x: sh.on.x - sh.s * this.hole.x, y: sh.on.y - sh.s * this.hole.y, vig: sh.vig };
+    }
+
+    /* where the camera is right now (mid-move: read from the animation's
+       eased progress; the keyframes are linear in s / x / y / vig) */
+    _camNow() {
+      if (!this._camAnims) return Object.assign({}, this.cam);
+      const p = this._camAnims[0].effect.getComputedTiming().progress;
+      const k = p == null ? 1 : p;
+      const f = this._camFrom;
+      const t = this._camTo;
+      return { s: f.s + (t.s - f.s) * k, x: f.x + (t.x - f.x) * k, y: f.y + (t.y - f.y) * k, vig: f.vig + (t.vig - f.vig) * k };
+    }
+
+    _stopCam() {
+      if (this._camAnims) {
+        const now = this._camNow();
+        this._camAnims.forEach((x) => x.cancel());
+        this._camAnims = null;
+        this._setCam(now);
+      }
+      if (this._camDone) this._camDone(); // the superseded shot resolves
+    }
+
+    _setCam(c) {
+      this.cam = Object.assign({}, c);
+      this.rig.style.transform = camXf(c);
+      this.focusVig.style.opacity = String(Math.round(c.vig * 1000) / 1000);
+    }
+
+    /* Rig (world) point -> view point, e.g. to zoom the view swing at the
+       window wherever the camera is framing it. */
+    toScreen(p) {
+      const c = this._camNow();
+      return { x: c.x + c.s * p.x, y: c.y + c.s * p.y };
     }
 
     setScroll(px) {
@@ -925,6 +1227,7 @@ window.ZD = window.ZD || {};
 
     /* ---- zombie behind the glass (the timer) ---- */
     _placeZombie(p, bob) {
+      this._zp = { y: p.y, s: p.s }; // where it is (without the bob)
       this.zombie.setScale(p.s);
       this.zombie.setPos(this.hole.x + (p.x || 0), p.y + (bob || 0));
       // the closer it is, the less the dark interior hides it
@@ -953,19 +1256,65 @@ window.ZD = window.ZD || {};
       this._zAnim = anime({ targets: o, x: [-this.R * 0.42, this.R * 0.42], duration: 2600, direction: 'alternate', loop: true, easing: 'easeInOutSine', update: () => this._placeZombie(Object.assign({}, base, { x: o.x }), 0) });
     }
 
-    /* Timer: the zombie climbs from far below the sill up to the glass in
-       `ms`.  Resolves 'timeout' when it gets there; stopZombie() cancels.
-       Paused with the game (anime + ZD.clock). */
-    zombieClimb(ms) {
+    /* Thinking time before the timer: the zombie finishes its walk-up (if
+       it is still coming) and then stands at the glass where it stopped;
+       zombieClimb() carries on from there. */
+    zombieLurk() {
+      const z = this.zombie;
+      const stand = () => z.play({ sheet: 'zombie.front.idle', fps: 8, loop: true });
+      const walk = this._zAnim;
+      if (!walk) return stand();
+      walk.finished.then(() => {
+        if (!walk._killed && !this.climbing) stand();
+      });
+    }
+
+    /* The zombie keeps walking towards the wall: the front view picks up
+       the walk the side view showed.  zpose.start -> zpose.far in `ms` while
+       the camera swings in; zombieClimb() then carries on from wherever it
+       has got to.  stopZombie() cancels. */
+    zombieWalkUp(ms = 2200) {
       this.stopZombie();
       const z = this.zombie;
-      z.play({ sheet: 'zombie.front.run', fps: 7, loop: true });
-      const { far, near } = this.zpose;
+      z.play({ sheet: 'zombie.front.run', fps: 6, loop: true });
+      const { start, far } = this.zpose;
       const o = { p: 0 };
-      const steps = Math.max(4, Math.round(ms / 1600)); // hand-over-hand pulls
+      this._placeZombie(start, 0);
+      this._zAnim = anime({
+        targets: o,
+        p: 1,
+        duration: D(ms),
+        easing: 'linear',
+        update: (a) => {
+          const hop = this._stride(a.currentTime);
+          this._placeZombie({ y: start.y + (far.y - start.y) * o.p, s: start.s + (far.s - start.s) * o.p }, -hop * 4);
+        },
+        complete: () => {
+          this._zAnim = null;
+        },
+      });
+    }
+
+    /* walking bounce 0..1 at `t` ms: one bump per footstep */
+    _stride(t) {
+      return Math.abs(Math.sin((t / ZOMBIE_STEP_MS) * Math.PI));
+    }
+
+    /* Timer: the zombie walks on from where it is (zombieWalkUp) to the
+       glass in `ms`, at a steady pace.  Resolves 'timeout' when it gets
+       there; stopZombie() cancels.  Paused with the game (anime +
+       ZD.clock).  onProgress(q, hop) runs every frame with the progress
+       (0..1) and the stride's bounce (0..1) - it drives the HUD timer
+       meter (ZD.ui.timerSet). */
+    zombieClimb(ms, onProgress) {
+      this.stopZombie();
+      const z = this.zombie;
+      if (z.sheetName !== 'zombie.front.run') z.play({ sheet: 'zombie.front.run', fps: 6, loop: true });
+      const { near } = this.zpose;
+      const from = this._zp || this.zpose.far;
+      const o = { p: 0 };
       let lastStep = 0;
       let lastBeat = 0;
-      this._placeZombie(far, 0);
       this.climbing = true;
       return new Promise((resolve) => {
         this._zAnim = anime({
@@ -973,18 +1322,18 @@ window.ZD = window.ZD || {};
           p: 1,
           duration: ms,
           easing: 'linear',
-          update: () => {
-            const p = o.p;
-            // each pull is quick then a pause: a stepped climb, not a glide
-            const f = p * steps;
-            const stepP = (Math.floor(f) + ZD.util.easeOutCubic(f % 1)) / steps;
-            const q = Math.min(1, stepP);
-            this._placeZombie({ y: far.y + (near.y - far.y) * q, s: far.s + (near.s - far.s) * q }, -Math.sin((f % 1) * Math.PI) * 10);
-            if (Math.floor(f) !== lastStep) {
-              lastStep = Math.floor(f);
-              ZD.audio.play('scrape');
+          update: (a) => {
+            const q = o.p;
+            const hop = q < 1 ? this._stride(a.currentTime) : 0;
+            // closer = bigger steps on screen: the bounce grows with it
+            this._placeZombie({ y: from.y + (near.y - from.y) * q, s: from.s + (near.s - from.s) * q }, -hop * (4 + 8 * q));
+            if (onProgress) onProgress(q, hop);
+            const step = Math.floor(a.currentTime / ZOMBIE_STEP_MS);
+            if (step !== lastStep) {
+              lastStep = step;
+              ZD.audio.play('step');
             }
-            const danger = p > 0.7;
+            const danger = q > 0.7;
             this.glass.setDanger(danger);
             if (danger && performance.now() - lastBeat > 850) {
               lastBeat = performance.now();
@@ -1066,7 +1415,7 @@ window.ZD = window.ZD || {};
       const sc = this.scatter;
       this.el.insertBefore(sc.far.node, fenceL.node);
       this.el.insertBefore(sc.mid.node, fenceL.node);
-      [sc.road, sc.verge, sc.fore].forEach((s) => this.el.appendChild(s.node));
+      [sc.road, sc.surface, sc.verge, sc.fore].forEach((s) => this.el.appendChild(s.node));
       // distance already run past earlier walls; scroll px is added on top
       this.travel = 0;
 
@@ -1120,9 +1469,13 @@ window.ZD = window.ZD || {};
       coverBox.appendChild(coverSvg);
       this.cover.appendChild(coverBox);
       this.el.appendChild(this.cover);
-      // character sizes in the side view
+      // character sizes in the side view.  The boy stands ~270 px; the
+      // zombie stands ~300 px (zombie.side.* sheets: 188 px tall at scale 1),
+      // a little taller than him, so its hunched run / attack / leap poses
+      // (heads and boots matched to its idle in tools/build-assets.py) still
+      // come up close to his height instead of looking small next to him.
       this.heroScale = 0.86;
-      this.zombieScale = 1.38;
+      this.zombieScale = 1.6;
       // feet -> body-centre distance (scaled px), measured from the sheets;
       // heroLeapCore is for hero.sideLeap, whose mid-air frames sit higher
       this.heroCore = Math.round(150 * this.heroScale);
@@ -1210,6 +1563,7 @@ window.ZD = window.ZD || {};
       });
       this.zombie.setPos(this.zombieHome.x + this.zombieOffset - px, this.zombieHome.y);
       if (this.gate) this.gate.style.transform = `translateX(${this.gateOffset - px}px)`;
+      if (this.gateDoors) this.gateDoors.style.transform = `translateX(${this.gateOffset - px}px)`;
     }
 
     zombieOffset = 0;
@@ -1259,16 +1613,22 @@ window.ZD = window.ZD || {};
       this.zombie.play({ sheet: 'zombie.side.idle', fps: 7, loop: true });
     }
 
-    /* Run to the next checkpoint: world scrolls, the next wall slides in. */
-    async runToNext(distance = 1700, duration = 2600, { withZombie = true, gate = false } = {}) {
+    /* The next checkpoint, `distance` px further on: its wall (or, with
+       `gate`, the safe zone) waits there, still off screen. */
+    prepareRun(distance, { gate = false } = {}) {
       const nw = this.nextWall;
       nw.offset = distance;
       nw.glass.restore();
       nw.glass.setTarget(null);
       nw.root.style.display = gate ? 'none' : '';
       if (gate) this._buildGate(distance);
-      this.zombieOffset = distance;
-      if (withZombie) {
+    }
+
+    /* Move the zombie on to the checkpoint at `offset` (fresh, idle), or
+       hide it when that checkpoint has none. */
+    sendZombieTo(offset, show = true) {
+      this.zombieOffset = offset;
+      if (show) {
         this.zombie.show(true);
         this.zombie.setFlip(false);
         this.zombie.setRotation(0);
@@ -1278,11 +1638,120 @@ window.ZD = window.ZD || {};
         this.zombie.show(false);
       }
       this.zombie.el.style.opacity = '';
-      this.hero.play({ sheet: 'hero.sideRun', fps: 16, loop: true });
-      const stepTimer = setInterval(() => {
-        ZD.audio.play('step');
-        fx.dust(this.fxLayer, this.hero.x - 18, this.heroHome.y - 8);
-      }, 230);
+      this.setScroll(this.scrollX);
+    }
+
+    /* A new wall's zombie arrives: it starts off screen to the right and
+       walks slowly, at a steady pace, towards its spot by the wall.  The
+       caller swings to the front view while it is still walking (the front
+       view carries the walk on), so nothing waits for it to stop; it stands
+       idle when it gets there, or at once with settleZombie().  Moves only
+       the sprite's transform (zombieOffset -> setScroll). */
+    zombieWalkIn(duration = 5200) {
+      const z = this.zombie;
+      anime.remove(this);
+      z.setFlip(false);
+      z.setRotation(0);
+      z.setOffsetY(0);
+      z.el.style.opacity = '';
+      // just past the right edge of the stage
+      this.zombieOffset = STAGE_W + 260 - this.zombieHome.x + this.scrollX;
+      this.setScroll(this.scrollX);
+      z.show(true);
+      z.play({ sheet: this.walkSheet, fps: 8, loop: true });
+      let lastStep = 0;
+      return anime({
+        targets: this,
+        zombieOffset: 0,
+        duration: D(duration),
+        easing: 'linear',
+        update: (a) => {
+          this.setScroll(this.scrollX);
+          const step = Math.floor(a.currentTime / ZOMBIE_STEP_MS);
+          if (step !== lastStep && this.el.classList.contains('active')) {
+            lastStep = step;
+            ZD.audio.play('step');
+          }
+        },
+        complete: () => this.settleZombie(),
+      }).finished;
+    }
+
+    /* the walk-in is over (or cut short): the zombie stands at its spot */
+    settleZombie() {
+      anime.remove(this);
+      this.zombieOffset = 0;
+      this.setScroll(this.scrollX);
+      this.zombie.play({ sheet: 'zombie.side.idle', fps: 7, loop: true });
+    }
+
+    get heroRunSpeed() {
+      return HERO_RUN_SPEED;
+    }
+
+    /* Show the run-cycle frame for `dist` px run so far (see RUN_FRAME_PX).
+       Returns true when this call moved onto a foot-landing frame, so the
+       caller can play the step sound / kick up dust right on the contact. */
+    heroRunAt(dist) {
+      const h = this.hero;
+      if (h.sheetName !== 'hero.sideRun' || h.anim) {
+        h.stop();
+        h.setSheet('hero.sideRun');
+      }
+      const f = Math.floor(Math.max(0, dist) / RUN_FRAME_PX) % 12;
+      const landed = f !== h.frame && RUN_CONTACT.includes(f);
+      if (f !== h.frame) h.setFrame(f);
+      return landed;
+    }
+
+    /* Run the hero along the road to stage x `x1` (feet on the road): the
+       pace ramps up and down gently, legs locked to the distance covered. */
+    async heroRunTo(x1, { easing = 'easeInOutSine', ramp = 0.3 } = {}) {
+      const h = this.hero;
+      const x0 = h.x;
+      const dist = Math.abs(x1 - x0);
+      h.setFlip(x1 < x0);
+      // average pace ~HERO_RUN_SPEED, plus a short ramp at either end
+      const ms = Math.max(350, (dist / HERO_RUN_SPEED) * 1000 * (1 + ramp));
+      const o = { x: x0 };
+      let run = 0;
+      await anime({ targets: o, x: x1, duration: D(ms), easing, update: () => {
+        run = Math.abs(o.x - x0);
+        h.setPos(o.x, this.heroHome.y);
+        if (this.heroRunAt(run)) {
+          ZD.audio.play('step');
+          fx.dust(this.fxLayer, o.x - 18, this.heroHome.y - 8);
+        }
+      } }).finished;
+    }
+
+    /* this skin's walk cycle; a skin without one walks on its run sheet */
+    get walkSheet() {
+      const skin = this.zombie.skin || 'zombie';
+      return A.sprite(skin + '.side.walk') ? 'zombie.side.walk' : 'zombie.side.run';
+    }
+
+    /* Arrived at the checkpoint `distance` px on (camera at `distance`): it
+       becomes the current one at the home position.  The distance run moves
+       into `travel`, so the scenery stays exactly where it is (no snap back
+       to the previous wall's view). */
+    finishRun(distance) {
+      this.walls[this.cur].root.style.display = 'none';
+      this.cur = 1 - this.cur;
+      this.wall.offset = 0;
+      this.zombieOffset = 0;
+      if (this.gate) this.gateOffset = 0;
+      this.travel += distance;
+      this.setScroll(0);
+      this.hero.setPos(this.heroHome.x, this.heroHome.y);
+      this.hero.play({ sheet: 'hero.sideIdle', fps: 9, loop: true });
+    }
+
+    /* Run to the next checkpoint on autopilot: world scrolls, the next wall
+       slides in.  (In play the learner drives this run: game.runAndJump.) */
+    async runToNext(distance = 1700, duration = 2600, { withZombie = true, gate = false } = {}) {
+      this.prepareRun(distance, { gate });
+      this.sendZombieTo(distance, withZombie);
       // the hero may be on the far side of the wall (after jumping through):
       // the camera catches up and the hero settles back at the home spot
       const hx0 = this.hero.x;
@@ -1291,78 +1760,140 @@ window.ZD = window.ZD || {};
       await anime({ targets: o, v: distance, duration: D(duration), easing: 'easeInOutSine', update: () => {
         this.setScroll(o.v);
         if (hx0 !== hx1) this.hero.setPos(hx0 + (hx1 - hx0) * (o.v / distance), this.heroHome.y);
+        // legs follow the road covered (camera move + the hero's own move)
+        if (this.heroRunAt(o.v + (this.hero.x - hx0))) {
+          ZD.audio.play('step');
+          fx.dust(this.fxLayer, this.hero.x - 18, this.heroHome.y - 8);
+        }
       } }).finished;
-      clearInterval(stepTimer);
-      // finalize: the new wall becomes current at the home position.  The
-      // distance run moves into `travel`, so the scenery stays exactly where
-      // it is (no snap back to the previous wall's view).
-      this.walls[this.cur].root.style.display = 'none';
-      this.cur = 1 - this.cur;
-      this.wall.offset = 0;
-      this.zombieOffset = 0;
-      if (this.gate) this.gateOffset = 0;
-      this.travel += distance;
-      this.setScroll(0);
-      this.hero.play({ sheet: 'hero.sideIdle', fps: 9, loop: true });
+      this.finishRun(distance);
     }
 
-    /* Finale: the SAFE ZONE building (assets/images/land/safe zone.png).
-       The tower's front panel (green banner) is its door. */
+    /* One leaf of the sliding steel gate (assets/images/safe-zone-gate.png,
+       split at its centre seam by the asset build), stretched to fill its
+       half of the doorway. */
+    _gateLeaf(key, side) {
+      return el('div', { class: 'safe-gate-half ' + side, style: { backgroundImage: `url("${A.imageUrl(key)}")` } });
+    }
+
+    /* Finale: the SAFE ZONE building (see SAFE_ZONE).  Stands on the road
+       with its gateway floor level with the hero's feet. */
     _buildGate(offset) {
       if (this.gate) this.gate.remove();
       const img = A.image('safeZone');
       const S = SAFE_ZONE.scale;
       const w = Math.round(img.w * S);
       const h = Math.round(img.h * S);
-      const g = el('div', { class: 'gate safe-zone', style: { left: SAFE_ZONE.left + 'px', top: this.groundY + SAFE_ZONE.sink - h + 'px', width: w + 'px', height: h + 'px', zIndex: 12 } });
+      const top = Math.round(this.groundY + 4 - SAFE_ZONE.floorY * S);
+      const g = el('div', { class: 'gate safe-zone', style: { left: SAFE_ZONE.left + 'px', top: top + 'px', width: w + 'px', height: h + 'px', zIndex: 12 } });
       g.append(el('div', { class: 'safe-zone-art', style: { backgroundImage: `url("${A.imageUrl('safeZone')}")` } }));
       // the art has the English sign baked in; other languages get a label over it
       if (window.I18n && I18n.lang !== 'en') {
         const p = SAFE_ZONE.plaque;
         g.append(el('div', { class: 'safe-label', text: ZD.T('intro3Safe'), style: { left: p.x * S + 'px', top: p.y * S + 'px', width: p.w * S + 'px', height: p.h * S + 'px', fontSize: p.h * S * 0.62 + 'px' } }));
       }
-      const d = SAFE_ZONE.door;
+      // warm light that fills the far door as the hero reaches it
+      const d = SAFE_ZONE.inner;
       const door = el('div', { class: 'safe-door', style: { left: d.x * S + 'px', top: d.y * S + 'px', width: d.w * S + 'px', height: d.h * S + 'px' } });
       door.append(el('div', { class: 'safe-door-light' }));
       g.append(door);
       this.el.appendChild(g);
       this.gate = g;
       this.gateOffset = offset;
-      this.doorX = SAFE_ZONE.left + (d.x + d.w / 2) * S; // stage x of the door centre (at rest)
+      /* The sliding gate, closed.  Its own layer (it scrolls with the
+         building): under the hero while he stands outside, over him once he
+         is inside, so it can shut behind him.  The leaves slide into the
+         pillars (the box clips them at the pillars' inner edges). */
+      const q = SAFE_ZONE.gate;
+      if (this.gateDoors) this.gateDoors.remove();
+      this.gateDoors = el('div', { class: 'safe-gate', style: { left: SAFE_ZONE.left + q.x * S + 'px', top: top + q.y * S + 'px', width: q.w * S + 'px', height: q.h * S + 'px', zIndex: 13 } }, [this._gateLeaf('safeGateL', 'left'), this._gateLeaf('safeGateR', 'right')]);
+      this.gateDoors.style.transform = `translateX(${offset}px)`;
+      // clip to the doorway's shape: its top corners are bevelled like the frame
+      const bv = SAFE_ZONE.gateBevel;
+      const pc = (v, of) => ((v / of) * 100).toFixed(2) + '%';
+      this.gateDoors.style.clipPath = `polygon(0 ${pc(bv.l[1], q.h)}, ${pc(bv.l[0], q.w)} 0, ${pc(q.w - bv.r[0], q.w)} 0, 100% ${pc(bv.r[1], q.h)}, 100% 100%, 0 100%)`;
+      this.el.appendChild(this.gateDoors);
+      // stage points (at rest): the gateway threshold and the far door's foot
+      const o = SAFE_ZONE.opening;
+      this.doorX = SAFE_ZONE.left + (o.x + o.w / 2) * S;
+      this.doorY = this.groundY + 4;
+      this.innerX = SAFE_ZONE.left + (d.x + d.w / 2) * S;
+      this.innerY = top + (d.y + d.h) * S;
       g.style.transform = `translateX(${offset}px)`;
     }
 
-    /* The door rolls open, the hero runs in, and it shuts behind them. */
+    /* Slide the gate open (true) or shut (false). */
+    _slideGate(open, ms, easing) {
+      const w = this.gateDoors.offsetWidth / 2 + 6;
+      const [l, r] = this.gateDoors.children;
+      return Promise.all([
+        anime({ targets: l, translateX: open ? [0, -w] : [-w, 0], duration: D(ms), easing }).finished,
+        anime({ targets: r, translateX: open ? [0, w] : [w, 0], duration: D(ms), easing }).finished,
+      ]);
+    }
+
+    /* The hero runs along the wall to the closed gate and faces it; the gate
+       slides open, he runs down the lit corridor - getting smaller with
+       distance - and the gate slides shut behind him. */
     async enterSafeZone() {
       if (!this.gate) return;
       const light = this.gate.querySelector('.safe-door-light');
       const hero = this.hero;
-      ZD.audio.play('unlock');
-      await anime({ targets: light, opacity: [0, 1], scaleY: [0, 1], duration: D(520), easing: 'easeOutCubic' }).finished;
+      const doors = this.gateDoors;
+      await this.heroRunTo(this.doorX, { easing: 'easeInOutSine', ramp: 0.25 });
+      // face the gate (seen from behind) while it opens
       hero.setFlip(false);
-      hero.play({ sheet: 'hero.sideRun', fps: 16, loop: true });
-      const stepTimer = setInterval(() => ZD.audio.play('step'), 230);
-      const o = { x: hero.x };
-      const dist = Math.abs(this.doorX - o.x);
-      await anime({ targets: o, x: this.doorX, duration: D(Math.max(600, dist * 1.25)), easing: 'easeInOutSine', update: () => hero.setPos(o.x, this.heroHome.y) }).finished;
-      clearInterval(stepTimer);
-      // step inside: shrink a touch into the doorway and vanish into the light
+      hero.play({ sheet: 'hero.backIdle', fps: 9, loop: true });
+      ZD.audio.play('unlock');
+      await wait(D(250));
       ZD.audio.play('whoosh');
-      const k = { s: this.heroScale };
-      await Promise.all([
-        anime({ targets: k, s: this.heroScale * 0.86, duration: D(420), easing: 'easeInQuad', update: () => hero.setScale(k.s) }).finished,
-        anime({ targets: hero.el, opacity: [1, 0], duration: D(420), easing: 'easeInQuad' }).finished,
-      ]);
+      await this._slideGate(true, 900, 'easeInOutSine');
+      await wait(D(120));
+      // run in
+      hero.play({ sheet: 'hero.backRun', fps: 13, loop: true });
+      /* Constant pace in depth: scale = 1 / (1 + k u) for u 0 -> 1, and the
+         feet slide toward the far door in step with the scale, so the run
+         slows on screen as it recedes (perspective). */
+      const S1 = SAFE_ZONE.innerScale;
+      const k = 1 / S1 - 1;
+      const x0 = this.doorX;
+      const y0 = this.doorY;
+      const o = { u: 0 };
+      let lit = false;
+      let closing = null;
+      await anime({ targets: o, u: 1, duration: D(1700), easing: 'linear', update: () => {
+        const sc = 1 / (1 + k * o.u);
+        const p = (1 - sc) / (1 - S1); // 0 at the threshold, 1 at the far door
+        hero.setScale(this.heroScale * sc);
+        hero.setPos(x0 + (this.innerX - x0) * p, y0 + (this.innerY - y0) * p);
+        // past the threshold: the gate is in front of him now
+        if (o.u > 0.06) doors.style.zIndex = 21;
+        if (!lit && o.u > 0.3) {
+          lit = true;
+          anime({ targets: light, opacity: [0, 1], duration: D(600), easing: 'easeOutCubic' });
+        }
+        // halfway down the corridor the gate slides shut behind him
+        if (!closing && o.u > 0.5) closing = this._slideGate(false, 750, 'easeInQuad');
+        hero.el.style.opacity = String(Math.min(1, Math.max(0, (1 - o.u) / 0.3)));
+      } }).finished;
+      await closing;
       hero.stop();
-      await anime({ targets: light, scaleY: [1, 0], duration: D(420), easing: 'easeInCubic' }).finished;
+      // clang: the gate is shut and he is safe inside
       ZD.audio.play('thud');
+      fx.shake(4, 200);
+      const q = SAFE_ZONE.gate;
+      const S = SAFE_ZONE.scale;
+      fx.puffs(this.fxLayer, this.doorX, this.doorY - 6, 5);
       fx.flash('#fff2a8', 300, 0.3);
-      fx.sparkles(this.fxLayer, this.doorX, this.heroHome.y - 180, 26, '#fff2a8');
+      fx.sparkles(this.fxLayer, this.doorX, this.doorY - (q.h * S) / 2, 22, '#fff2a8');
+      await wait(D(500));
     }
 
     removeGate() {
       if (this.gate) this.gate.remove();
+      if (this.gateDoors) this.gateDoors.remove();
       this.gate = null;
+      this.gateDoors = null;
       this.hero.setScale(this.heroScale);
       this.hero.el.style.opacity = '';
     }
@@ -1391,7 +1922,9 @@ window.ZD = window.ZD || {};
       for (let i = 0; i < n; i++) {
         const z = new ZD.Sprite({ className: 'char-zombie extra', zIndex: 17 - i, skin: ZD.scene.zombieSkins[(i + 1) % 2] });
         z.setSheet('zombie.side.run');
-        const sc = (1.45 - i * 0.2) * (this.zombieScale / 1.6);
+        // the main zombie's size, a touch smaller per rank for depth: none
+        // of the horde may look small next to the boy
+        const sc = this.zombieScale * (1 - i * 0.05);
         z.setScale(sc);
         z.setPos(2000 + i * 230, this.groundY + 4 - i * 6);
         z.play({ sheet: 'zombie.side.run', fps: 12 + i, loop: true });
@@ -1433,8 +1966,14 @@ window.ZD = window.ZD || {};
     }
 
     cut(name) {
+      // a swing still in flight (e.g. the intro was skipped mid-move) is
+      // dropped, and must not write its end state over this cut later
+      this.gen = (this.gen || 0) + 1;
+      (this._swing || []).forEach((a) => a.cancel());
+      this._swing = null;
       this._syncFront(name);
       this._tag(name);
+      if (name === 'front') this.front.frame('wide', { duration: 0 });
       ['front', 'side'].forEach((n) => {
         const s = this._scene(n).el;
         s.classList.toggle('active', n === name);
@@ -1444,27 +1983,62 @@ window.ZD = window.ZD || {};
       this.current = name;
     }
 
-    /* Cinematic shift between views with a perspective swing + zoom. */
-    async to(name, { duration = 820, zoomAt } = {}) {
+    /* Cinematic shift between views: the old view zooms (at `zoomAt`),
+       swings and fades out while the new one swings and fades in.  Web
+       Animations on transform / opacity only, so the swing runs on the
+       compositor (smooth even while the main thread works, rasterised at
+       the largest zoom - no stretched pixels).
+       Into the front view with `shot`: the view only swings and fades, and
+       the camera rig does the zoom - from the 'enter' framing straight into
+       that shot in one long glide (`shotDuration`), so the swing and the
+       push-in on the wall read as ONE camera move, not two.  Resolves when
+       the swing is done (a glide keeps settling for a moment after). */
+    async to(name, { duration = 820, zoomAt, shot = null, shotDuration = 1550 } = {}) {
       if (this.current === name) return;
       this._syncFront(name);
       this._tag(name);
       const from = this._scene(this.current).el;
       const to = this._scene(name).el;
       const dir = name === 'side' ? 1 : -1;
+      const inDelay = duration * 0.35;
+      // leaving the front view, the swing zooms at the point as the rig
+      // frames it right now
+      if (zoomAt && this.current === 'front') zoomAt = this.front.toScreen(zoomAt);
+      let inScale = 0.92;
+      if (name === 'front') {
+        if (shot) {
+          this.front.frame(shot, { from: 'enter', duration: shotDuration, delay: inDelay, easing: 'glide' });
+          inScale = 1; // the rig zooms instead
+        } else {
+          this.front.frame('wide', { duration: 0 });
+        }
+      }
       to.classList.add('active');
-      to.style.opacity = 0;
-      const origin = zoomAt ? `${zoomAt.x}px ${zoomAt.y}px` : '50% 50%';
-      from.style.transformOrigin = origin;
+      from.style.transformOrigin = zoomAt ? `${zoomAt.x}px ${zoomAt.y}px` : '50% 50%';
       to.style.transformOrigin = '50% 50%';
       ZD.audio.play('swoosh');
-      await Promise.all([
-        anime({ targets: from, opacity: [1, 0], scale: [1, 1.18], rotateY: [0, -18 * dir], duration, easing: 'easeInQuad' }).finished,
-        anime({ targets: to, opacity: [0, 1], scale: [0.92, 1], rotateY: [16 * dir, 0], duration, delay: duration * 0.35, easing: 'easeOutCubic' }).finished,
-      ]);
+      const out = from.animate(
+        [{ opacity: 1, transform: 'scale(1) rotateY(0deg)' }, { opacity: 0, transform: `scale(1.18) rotateY(${-18 * dir}deg)` }],
+        { duration: D(duration), easing: CAM_EASE.easeInQuad, fill: 'both' }
+      );
+      const inn = to.animate(
+        [{ opacity: 0, transform: `scale(${inScale}) rotateY(${16 * dir}deg)` }, { opacity: 1, transform: 'scale(1) rotateY(0deg)' }],
+        { duration: D(duration), delay: D(inDelay), easing: CAM_EASE.easeOutCubic, fill: 'both' }
+      );
+      [out, inn].forEach((a) => ZD.clock.track(a));
+      this._swing = [out, inn];
+      const gen = this.gen;
+      await Promise.all([animDone(out), animDone(inn)]);
+      if (gen !== this.gen) return; // cut() took over meanwhile
+      this._swing = null;
+      // final state into the inline style, then drop the animations
       from.classList.remove('active');
+      from.style.opacity = '0';
       from.style.transform = '';
+      to.style.opacity = '1';
       to.style.transform = '';
+      out.cancel();
+      inn.cancel();
       this.current = name;
     }
   }
@@ -1483,7 +2057,8 @@ window.ZD = window.ZD || {};
     zombieSkins: [null, 'zombie2'],
     /* Dress the wall's zombie (front + side views) as variant `i`. */
     setZombieSkin(i) {
-      const skin = this.zombieSkins[((i % this.zombieSkins.length) + this.zombieSkins.length) % this.zombieSkins.length];
+      this.skinIndex = ((i % this.zombieSkins.length) + this.zombieSkins.length) % this.zombieSkins.length;
+      const skin = this.zombieSkins[this.skinIndex];
       this.front.zombie.setSkin(skin);
       this.side.zombie.setSkin(skin);
     },
@@ -1502,12 +2077,16 @@ window.ZD = window.ZD || {};
       const tick = (now) => {
         const dt = Math.min(0.1, (now - last) / 1000);
         last = now;
-        const step = (l, scroll) => {
+        // every cloud drifts, but only the shown views' clouds are moved on
+        // screen (each cloud is its own compositor layer: no repaint)
+        const step = (l, scroll, shown) => {
           l.drift = (l.drift + dt * CLOUD_PX_PER_S * l.speed) % (WORLD_W + l.w);
-          placeCloud(l, scroll);
+          if (shown) placeCloud(l, scroll);
         };
-        this.front.clouds.forEach((l) => step(l, 0));
-        this.side.clouds.forEach((l) => step(l, this.side.sceneX));
+        const frontOn = this.front.el.classList.contains('active');
+        const sideOn = this.side.el.classList.contains('active');
+        this.front.clouds.forEach((l) => step(l, 0, frontOn));
+        this.side.clouds.forEach((l) => step(l, this.side.sceneX, sideOn));
         requestAnimationFrame(tick);
       };
       requestAnimationFrame(tick);

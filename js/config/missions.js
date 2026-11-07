@@ -11,13 +11,17 @@
    of every play the six pieces are shuffled and dealt one per wall, so each
    piece is asked exactly once, in a random order.
 
-   mission : { id, titleKey, hearts, rounds, openings }
-     hearts    last the whole mission; losing them all replays that wall
-     rounds    one entry per wall, in play order: { tier, timer }
+   mission : { id, titleKey, rounds, openings }
+     (one wrong answer or time-out ends the run: the zombie breaks in, the
+     boy falls, and Replay plays that wall again)
+     rounds   one entry per wall, in play order: { tier, timer, delay }
                  tier   which opening pool the wall draws from
                  timer  seconds before the zombie climbs through, or null
-                        (no timer - the zombie only paces).  Learners can
-                        switch the timer off in the pause menu.
+                        (no timer - the zombie only paces)
+                 delay  seconds of thinking time after the question appears
+                        before the timer shows up and the zombie starts
+                        its walk (0 = straight away).  Falls stage by stage
+                        so later walls get harder.
      openings  { tier: [O(...), ...] } - each tier must have at least 2
                openings for EVERY piece: after a miss the wall asks the
                same piece again in a different opening.
@@ -51,14 +55,13 @@ window.ZD = window.ZD || {};
     {
       id: 'm1',
       titleKey: 'mission1',
-      hearts: 3,
       rounds: [
-        { tier: 'start', timer: null },
-        { tier: 'start', timer: 20 },
-        { tier: 'middle', timer: 15 },
-        { tier: 'middle', timer: 14 },
-        { tier: 'hard', timer: 13 },
-        { tier: 'hard', timer: 12 },
+        { tier: 'start', timer: 10, delay: 5 },
+        { tier: 'start', timer: 10, delay: 4 },
+        { tier: 'middle', timer: 10, delay: 3 },
+        { tier: 'middle', timer: 10, delay: 2 },
+        { tier: 'hard', timer: 10, delay: 1 },
+        { tier: 'hard', timer: 10, delay: 0 },
       ],
       openings: {
         start: tier([90], [270], [-90, 90, 0, 180]),
@@ -67,9 +70,6 @@ window.ZD = window.ZD || {};
       },
     },
   ];
-
-  /* Points per wall knocked out (no carry-over penalty). */
-  ZD.SCORING = { perHit: 100 };
 
   /* Authoring guard: report openings that break the rules above. */
   const bad = [];

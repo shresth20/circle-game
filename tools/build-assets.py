@@ -17,6 +17,7 @@ What it does
 
 Run:   python3 tools/build-assets.py        (needs Pillow, numpy, scipy)
        python3 tools/build-assets.py --only zombie   (zombie sheets only)
+       python3 tools/build-assets.py --only timer    (timer meter art only)
 """
 import json
 import os
@@ -281,7 +282,7 @@ def build_layers():
     # crop from the first post's centre to the last post's centre: mirror-tiled,
     # neighbouring tiles share one post and the spacing stays even (~390px)
     alpha_layer("fenceFront", "bg/fence_front_view_25x9.png", "bg/fence-front.webp", crop=(81, 505, 2420, 880), tile=0)
-    alpha_layer("safeZone", "land/safe zone.png", "bg/safe-zone.webp", crop="auto")
+    build_safe_zone()
 
     # side-view road: brick walkway with a visible top surface (rows 230-324)
     # and front face (to 500); trimmed to its content, mirror-tiled at runtime
@@ -303,14 +304,15 @@ def build_layers():
     build_front_road()
     build_banner()
     build_profile()
+    build_timer()
     build_welcome()
     build_start_button()
 
-    # Perspective road (used by the mission-map intro scene) and the defeat illustration.
+    build_gameover()
+
+    # Perspective road (used by the mission-map intro scene).
     road = load("full-picture/image copy 5.png")
     MANIFEST["images"]["roadPersp"] = {"src": save_opaque(road, "bg/road-persp.webp", 80), "w": road.shape[1], "h": road.shape[0]}
-    go = load("full-picture/image copy.png")[108:882, 50:1622]
-    MANIFEST["images"]["gameOver"] = {"src": save_opaque(go, "bg/game-over.webp", 82), "w": go.shape[1], "h": go.shape[0]}
 
 
 # Bottom message bar (assets/images/banner.png): the purple plate with a round
@@ -376,6 +378,21 @@ def build_welcome():
     MANIFEST["images"]["welcomeLogo"] = {"src": save(arr, "ui/welcome-logo.webp", 90), "w": w, "h": h}
 
 
+def build_gameover():
+    """Game-over sign (assets/images/gameover.png, transparent): the zombie
+    peeking over the stone plate.  Cropped to its content, 1200 px wide; the
+    runtime shows it ~1000 px wide over the zoomed-in defeat (game.gameOver).
+    Replaces the old full-screen defeat illustration (gameOver)."""
+    arr = load("gameover.png")
+    x0, y0, x1, y1 = bbox(arr)
+    arr = arr[y0:y1, x0:x1]
+    w = 1200
+    h = round(arr.shape[0] * w / arr.shape[1])
+    arr = np.array(Image.fromarray(arr).resize((w, h), Image.LANCZOS))
+    MANIFEST["images"].pop("gameOver", None)
+    MANIFEST["images"]["gameOverSign"] = {"src": save(arr, "ui/game-over-sign.webp", 90), "w": w, "h": h}
+
+
 def build_profile():
     """Hero profile picture (assets/images/boy/profile.png, opaque on purple):
     a square around the head, 256 px.  Shown in round frames (HUD portrait,
@@ -383,6 +400,31 @@ def build_profile():
     arr = load("boy/profile.png")[90:1110, 110:1130]
     arr = np.array(Image.fromarray(arr).resize((256, 256), Image.LANCZOS))
     MANIFEST["images"]["profile"] = {"src": save_opaque(arr, "ui/profile.webp", 90), "w": 256, "h": 256}
+
+
+def build_timer():
+    """Zombie timer meter (assets/images/timer/, transparent).
+    "image copy.png" holds two faces side by side - left the messy-haired
+    road worker (skin 0), right the hard-hat worker (skin 1); the empty
+    columns between them sit at x 858-992, so it is split at x 925.  Each face
+    is cropped to its content and sized 200 px tall.  "image.png" is the
+    small glowing brick wall (rays kept): stray grass at the left edge cut, cropped,
+    220 px tall.  The runtime (ZD.ui timer meter) shows them ~110 px tall."""
+    faces = load("timer/image copy.png")
+    for i, part in enumerate((faces[:, :925], faces[:, 925:])):
+        x0, y0, x1, y1 = bbox(part)
+        arr = part[y0:y1, x0:x1]
+        h = 200
+        w = round(arr.shape[1] * h / arr.shape[0])
+        arr = np.array(Image.fromarray(arr).resize((w, h), Image.LANCZOS))
+        MANIFEST["images"][f"timerFace{i}"] = {"src": save(arr, f"ui/timer-face-{i}.webp", 90), "w": w, "h": h}
+    wall = load("timer/image.png")[:, 30:]   # drop the stray grass tuft at the left edge
+    x0, y0, x1, y1 = bbox(wall)
+    arr = wall[y0:y1, x0:x1]
+    h = 220
+    w = round(arr.shape[1] * h / arr.shape[0])
+    arr = np.array(Image.fromarray(arr).resize((w, h), Image.LANCZOS))
+    MANIFEST["images"]["timerWall"] = {"src": save(arr, "ui/timer-wall.webp", 90), "w": w, "h": h}
 
 
 def build_dirt():
@@ -679,6 +721,13 @@ HERO_ANIM = {
     "backRun": {"mode": "body", "loop": True, "harmonics": 2, "max_squash": 0.08},
 }
 HERO_HAZE = {"backCheer"}     # smoky background residue around the figure
+# scared -> staggers back -> sits down hard -> flat on his back (4x3 grid of
+# 384 px cells); played when a zombie breaks in, see build_hero_fall
+HERO_FALL = "boy/image.png"
+# Sheets the generator drew at another size than the idle sheet.  Measured
+# on the head width and the upright standing height against the idle sheet
+# and checked side by side; the other sheets are within +-3% (noise).
+HERO_SCALE = {"sideFear": 0.915, "sideFall": 1.10}
 
 
 def _hero_frames(key):
@@ -734,14 +783,19 @@ def build_hero():
     for key, (figs, old) in sheets.items():
         view = "side" if key.startswith("side") else "back"
         cal = calib[view]
+        s = HERO_SCALE.get(key, 1.0)
         opt = dict(HERO_ANIM.get(key, {"mode": "plant", "loop": False}))
-        tr = S.track(figs, cal["stand"])
+        # placement is read in the drawing's own px (its old cells), then scaled
         if opt["mode"] == "plant" and not opt["loop"]:
-            opt["lift"] = S.grid_lift([o[1] + m["ground"] for m, o in zip(tr, old)], COLS, cal["stand"])
+            grounds = [o[1] + S.ground_y(f) for f, o in zip(figs, old)]
+            opt["lift"] = s * S.grid_lift(grounds, COLS, cal["stand"] / s)
         if opt["mode"] == "body":
             # keep the sheet's own average place of the anchor on the body
-            opt["x_offset"] = float(np.median([CELL / 2 - (o[0] + m["hx"]) for m, o in zip(tr, old)]))
-        print(f"  hero.{key}")
+            tr = S.track(figs, cal["stand"] / s)
+            opt["x_offset"] = s * float(np.median([CELL / 2 - (o[0] + m["hx"]) for m, o in zip(tr, old)]))
+        if s != 1.0:
+            figs = [S.resize(f, s) for f in figs]
+        print(f"  hero.{key}" + (f"  (x{s}: the idle sheet's size)" if s != 1.0 else ""))
         frames, anchors, info = S.stabilize(figs, cal["stand"], log=print, **opt)
         dx = cal["dx"] if opt["mode"] == "plant" else 0.0
         anchors = [(ax + dx, ay - cal["sink"]) for ax, ay in anchors]
@@ -750,7 +804,52 @@ def build_hero():
             {"src": save(sheet, f"hero/{key}.webp", 86)}, **meta,
             loop=bool(opt["loop"]), shadowW=HERO_SHADOW)
 
+    build_hero_fall(calib["side"])
     build_hero_leap()
+
+
+def build_hero_fall(cal):
+    """boy/image.png -> hero.sideFall: the boy, scared, staggers back, sits
+    down hard and ends flat on his back.  The head turns over, so the frames
+    are registered on the ground contact instead of the head: the generator
+    drew every row at its own place in the cells, but within a row the
+    motion is coherent (heel planted while the toes lift, then a step back),
+    so each row keeps its placement and the rows are joined where the front
+    of the boots meets (frames 3->4 and 7->8).  Every frame touches the
+    ground, so its lowest solid row sits on the line.  The anchor is where
+    the idle and fear sheets have it: on the boots of the standing frame."""
+    s = HERO_SCALE["sideFall"]
+    arr = keep_big_components(load(HERO_FALL), thresh=140, min_area=6000, grow=3)
+    arr = stretch_alpha(arr, lo=30)
+    cw = arr.shape[1] / COLS
+    cut = S.extract_grid(arr, COLS, ROWS)
+    figs = [S.defringe(f) for f, _, _ in cut]
+    stand = cal["stand"] / s                 # standing height in the drawing's px
+    band = int(0.12 * stand)                 # about the boots' height
+
+    def toe(f):
+        m = S.main_body(S.solid(f))
+        g = int(S.ground_y(f))
+        return float(np.nonzero(m[max(0, g - band):g].any(0))[0][-1] + 1)
+
+    ox = [x0 - (k % COLS) * cw for k, (_, x0, _) in enumerate(cut)]     # crop x in its cell
+    toes = [o + toe(f) for o, f in zip(ox, figs)]
+    shift = [0.0] * ROWS
+    for r in range(1, ROWS):
+        shift[r] = toes[r * COLS] - (toes[r * COLS - 1] - shift[r - 1])
+    wx = [o - shift[k // COLS] for k, o in enumerate(ox)]                # crop x on one stage
+    bb = S._boots_box(figs[0], stand)
+    anchor = wx[0] + (bb[0] + bb[2]) / 2 + cal["dx"] / s
+    frames, anchors = [], []
+    for f, x in zip(figs, wx):
+        g = S.resize(f, s)
+        frames.append(g)
+        anchors.append(((anchor - x) * g.shape[1] / f.shape[1], S.ground_y(g) - cal["sink"]))
+    print(f"  hero.sideFall  (x{s}: the idle sheet's size)  rows joined at the toes, shifts {[round(v) for v in shift]} px;"
+          f" front of the boots per frame {[round((t - shift[k // COLS] - toes[0]) * s) for k, t in enumerate(toes)]} px")
+    sheet, meta = S.pack(frames, anchors)
+    MANIFEST["sprites"]["hero.sideFall"] = dict(
+        {"src": save(sheet, "hero/sideFall.webp", 86)}, **meta, loop=False, shadowW=HERO_SHADOW)
 
 
 LEAP_W, LEAP_H = 420, 362          # wider cell: the mid-air strides are long
@@ -817,6 +916,13 @@ def build_hero_leap():
 #   * y      - the lowest pixel sits on the ground line; airborne leap frames
 #              keep their torso a fixed `core` above it instead (that is the
 #              point the game flies along the arc through the circle).
+#   * size   - optional hand correction on top of the measured scale.  Area
+#              under-reads hunched / stretched poses: zombi-1's side attack and
+#              leap came out with heads and boots ~15-20% smaller than its
+#              idle (measured on the head width and boot length), so the
+#              zombie shrank when it broke through the wall.  Tuned so the
+#              rigid parts (head, boots) match the idle sheet, and so the
+#              run -> leap -> attack hand-overs do not pop.
 # Frames are re-packed into 4-column grids with the anchor at the cell's
 # horizontal centre and at anchorY, so flipping and the runtime anchor agree.
 
@@ -848,8 +954,11 @@ ZOMBIE_SRC = {
         },
         "side": {
             "idle": {"parts": [P("image copy 5.png", 4, 2)], "anchor": "feet", "loop": True},
-            "run": {"parts": [P("Complete 16-frame sheet side view.png", 4, 4)], "anchor": "torso", "loop": True},
-            "attack": {"parts": [P("Complete 16-frame sprite sheet attack side view.png", 4, 4, [0, 15])], "anchor": "feet"},
+            "run": {"parts": [P("Complete 16-frame sheet side view.png", 4, 4)], "anchor": "torso", "loop": True, "size": 1.08},
+            # slow walk towards the wall before each question (8 frames, 4x2);
+            # zombie2 has no walk sheet - the game falls back to its run
+            "walk": {"parts": [P("image copy 9.png", 4, 2)], "anchor": "torso", "loop": True},
+            "attack": {"parts": [P("Complete 16-frame sprite sheet attack side view.png", 4, 4, [0, 15])], "anchor": "feet", "size": 1.2},
             # part 2 frame 0 wears a dizzy halo on the hair: measure on 1-2
             "die": {"parts": [P("image copy 6.png", 4, 2, [0]), P("image copy 7.png", 4, 2, [1, 2])], "anchor": "torso"},
             # no side-hit sheet for this skin: the first beats of `die` there and
@@ -857,7 +966,7 @@ ZOMBIE_SRC = {
             "hit": {"derive": ("die", [0, 1, 2, 3, 4, 3, 2, 1]), "anchor": "torso"},
             "dead": {"parts": [P("image copy 8.png", 1, 1)], "anchor": "dead"},
             "leap": {"parts": [P("Complete 16-frame sprite sheet jumping inside of the wall.png", 4, 4, [12, 13, 14, 15])],
-                     "anchor": "torso", "airborne": [3, 4, 5, 6]},
+                     "anchor": "torso", "airborne": [3, 4, 5, 6], "size": 1.15},
         },
     },
     "zombie2": {
@@ -872,18 +981,18 @@ ZOMBIE_SRC = {
         },
         "side": {
             "idle": {"parts": [P("image copy 8.png", 4, 2)], "anchor": "feet", "loop": True},
-            "run": {"parts": [P("image copy 9.png", 4, 2), P("image copy 10.png", 4, 2)], "anchor": "torso", "loop": True},
-            "attack": {"parts": [P("image copy 11.png", 4, 2, [0]), P("image copy 12.png", 4, 2, [7])], "anchor": "feet"},
+            "run": {"parts": [P("image copy 9.png", 4, 2), P("image copy 10.png", 4, 2)], "anchor": "torso", "loop": True, "size": 1.05},
+            "attack": {"parts": [P("image copy 11.png", 4, 2, [0]), P("image copy 12.png", 4, 2, [7])], "anchor": "feet", "size": 1.06},
             "hit": {"parts": [P("image copy 13.png", 4, 2, [0, 7])], "anchor": "torso"},
             "die": {"parts": [P("image copy 14.png", 4, 2, [0]), P("image copy 15.png", 4, 2, [0])], "anchor": "torso"},
             "dead": {"parts": [P("image copy 16.png", 1, 1)], "anchor": "dead"},
             "leap": {"parts": [P("image copy 18.png", 4, 2, [0, 1]), P("image copy 19.png", 4, 2, [6, 7])],
-                     "anchor": "torso", "airborne": [3, 4, 5, 6]},
+                     "anchor": "torso", "airborne": [3, 4, 5, 6], "size": 1.06},
         },
     },
 }
 # order matters: `hit` may derive from `die`, `dead` matches the end of `die`
-Z_ORDER = ["idle", "run", "attack", "die", "hit", "dead", "leap"]
+Z_ORDER = ["idle", "run", "walk", "attack", "die", "hit", "dead", "leap"]
 # Frame stabilisation (tools/sprite_stabilizer.py) on top of the registration
 # above: head tracked per frame, its path smoothed, a small feet-anchored
 # shear / stretch per frame removes the drawing's lean and bob jitter.  An
@@ -896,6 +1005,7 @@ Z_ORDER = ["idle", "run", "attack", "die", "hit", "dead", "leap"]
 Z_STAB = {
     "idle": {"mode": "plant", "loop": True, "harmonics": 1},
     "run": {"mode": "body", "loop": True, "harmonics": 2, "max_squash": 0.08},
+    "walk": {"mode": "body", "loop": True, "harmonics": 2, "max_squash": 0.08},
     "front.attack": {"mode": "plant", "loop": False},
 }
 
@@ -1152,6 +1262,7 @@ def _skin_sheets(skin, cfg, view):
                 s = s_idle * a_idle / float(np.median([_area(f) for f in refs]))
                 if act != "idle":
                     s = _head_scale(refs, s, stand, head_idle)
+                s *= spec.get("size", 1.0)
             for f in figs:
                 g = _resize(f, s)
                 frames.append(g)
@@ -1222,9 +1333,31 @@ def build_zombie():
 
 
 # --------------------------------------------------------------------------- #
+def build_safe_zone():
+    """safe-zone.png -> the finale building (watchtower + walls + an open
+    gateway with a lit corridor inside), trimmed to its content.  The runtime
+    (SAFE_ZONE in js/scene.js) places the gateway, corridor and sign by the
+    built image's pixels, so re-measure them if the art changes."""
+    arr = stretch_alpha(load("safe-zone.png"), lo=20)
+    x0, y0, x1, y1 = bbox(arr)
+    arr = arr[y0:y1, x0:x1]
+    MANIFEST["images"]["safeZone"] = {"src": save(arr, "bg/safe-zone.webp", 86), "w": arr.shape[1], "h": arr.shape[0], "ox": x0, "oy": y0}
+    print(f"  safeZone {arr.shape[1]}x{arr.shape[0]} (crop from {x0},{y0})")
+    # its sliding gate (safe-zone-gate.png): the two steel leaves inside the
+    # doorway frame (x 100-556, y 104-474), split at the centre seam (x 328)
+    # so each slides on its own; the runtime fits them to SAFE_ZONE.gate
+    gate = load("safe-zone-gate.png")[104:474, 100:556]
+    for key, leaf, out in (("safeGateL", gate[:, :228], "bg/safe-gate-l.webp"), ("safeGateR", gate[:, 228:], "bg/safe-gate-r.webp")):
+        leaf = leaf.copy()
+        leaf[:, :, 3] = 255
+        MANIFEST["images"][key] = {"src": save(leaf, out, 88), "w": leaf.shape[1], "h": leaf.shape[0]}
+    print(f"  safeGate 2 leaves {gate.shape[1] // 2}x{gate.shape[0]}")
+
+
+# --------------------------------------------------------------------------- #
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
-    only = {"zombie": lambda: build_zombie(), "hero": lambda: build_hero()}
+    only = {"zombie": lambda: build_zombie(), "hero": lambda: build_hero(), "timer": lambda: build_timer(), "gameover": lambda: build_gameover(), "safezone": lambda: build_safe_zone()}
     if sys.argv[1:2] == ["--only"] and sys.argv[2:3] and sys.argv[2] in only:
         # rebuild just these sheets into the existing manifest
         with open(OUT / "manifest.json") as f:

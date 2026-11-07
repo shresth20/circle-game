@@ -130,10 +130,10 @@
   },
   "safeZone": {
    "src": "bg/safe-zone.webp",
-   "w": 1633,
-   "h": 850,
-   "ox": 59,
-   "oy": 26
+   "w": 1661,
+   "h": 874,
+   "ox": 6,
+   "oy": 8
   },
   "roadTop": {
    "src": "bg/road-top.webp",
@@ -237,11 +237,6 @@
    "w": 1670,
    "h": 941
   },
-  "gameOver": {
-   "src": "bg/game-over.webp",
-   "w": 1572,
-   "h": 774
-  },
   "banner": {
    "src": "ui/banner.webp",
    "w": 1035,
@@ -268,6 +263,36 @@
    "src": "ui/start-button.webp",
    "w": 480,
    "h": 512
+  },
+  "timerFace0": {
+   "src": "ui/timer-face-0.webp",
+   "w": 175,
+   "h": 200
+  },
+  "timerFace1": {
+   "src": "ui/timer-face-1.webp",
+   "w": 202,
+   "h": 200
+  },
+  "timerWall": {
+   "src": "ui/timer-wall.webp",
+   "w": 241,
+   "h": 220
+  },
+  "gameOverSign": {
+   "src": "ui/game-over-sign.webp",
+   "w": 1200,
+   "h": 672
+  },
+  "safeGateL": {
+   "src": "bg/safe-gate-l.webp",
+   "w": 228,
+   "h": 370
+  },
+  "safeGateR": {
+   "src": "bg/safe-gate-r.webp",
+   "w": 228,
+   "h": 370
   }
  },
  "sprites": {
@@ -295,12 +320,12 @@
   },
   "hero.sideFear": {
    "src": "hero/sideFear.webp",
-   "fw": 262,
-   "fh": 362,
+   "fw": 242,
+   "fh": 332,
    "cols": 4,
    "rows": 3,
    "frames": 12,
-   "anchorY": 0.942,
+   "anchorY": 0.9367,
    "loop": false,
    "shadowW": 181
   },
@@ -413,6 +438,17 @@
    "loop": true,
    "shadowW": 181
   },
+  "hero.sideFall": {
+   "src": "hero/sideFall.webp",
+   "fw": 684,
+   "fh": 334,
+   "cols": 4,
+   "rows": 3,
+   "frames": 12,
+   "anchorY": 0.9281,
+   "loop": false,
+   "shadowW": 181
+  },
   "zombie.front.idle": {
    "src": "zombie/front-idle.webp",
    "fw": 188,
@@ -500,27 +536,40 @@
   },
   "zombie.side.run": {
    "src": "zombie/side-run.webp",
-   "fw": 380,
-   "fh": 250,
+   "fw": 406,
+   "fh": 268,
    "cols": 4,
    "rows": 4,
    "frames": 16,
    "loop": true,
-   "anchorY": 0.968,
+   "anchorY": 0.9701,
    "scaleAdjust": 0.5529,
    "shadowW": 187,
    "facing": "left",
-   "core": 117.6
+   "core": 126.3
+  },
+  "zombie.side.walk": {
+   "src": "zombie/side-walk.webp",
+   "fw": 296,
+   "fh": 338,
+   "cols": 4,
+   "rows": 2,
+   "frames": 8,
+   "loop": true,
+   "anchorY": 0.9793,
+   "scaleAdjust": 0.5529,
+   "shadowW": 187,
+   "facing": "left"
   },
   "zombie.side.attack": {
    "src": "zombie/side-attack.webp",
-   "fw": 390,
-   "fh": 248,
+   "fw": 464,
+   "fh": 296,
    "cols": 4,
    "rows": 4,
    "frames": 16,
    "loop": false,
-   "anchorY": 0.9758,
+   "anchorY": 0.9764,
    "scaleAdjust": 0.5529,
    "shadowW": 187,
    "facing": "left"
@@ -566,17 +615,17 @@
   },
   "zombie.side.leap": {
    "src": "zombie/side-leap.webp",
-   "fw": 426,
-   "fh": 248,
+   "fw": 490,
+   "fh": 286,
    "cols": 4,
    "rows": 4,
    "frames": 16,
    "loop": false,
-   "anchorY": 0.9758,
+   "anchorY": 0.9755,
    "scaleAdjust": 0.5529,
    "shadowW": 187,
    "facing": "left",
-   "core": 127.7
+   "core": 147.8
   },
   "zombie2.front.idle": {
    "src": "zombie2/front-idle.webp",
@@ -665,27 +714,27 @@
   },
   "zombie2.side.run": {
    "src": "zombie2/side-run.webp",
-   "fw": 406,
-   "fh": 344,
+   "fw": 426,
+   "fh": 360,
    "cols": 4,
    "rows": 4,
    "frames": 16,
    "loop": true,
-   "anchorY": 0.9797,
+   "anchorY": 0.9806,
    "scaleAdjust": 0.5529,
    "shadowW": 187,
    "facing": "left",
-   "core": 168.9
+   "core": 177.4
   },
   "zombie2.side.attack": {
    "src": "zombie2/side-attack.webp",
-   "fw": 394,
-   "fh": 288,
+   "fw": 420,
+   "fh": 304,
    "cols": 4,
    "rows": 4,
    "frames": 16,
    "loop": false,
-   "anchorY": 0.9757,
+   "anchorY": 0.977,
    "scaleAdjust": 0.5529,
    "shadowW": 187,
    "facing": "left"
@@ -731,17 +780,17 @@
   },
   "zombie2.side.leap": {
    "src": "zombie2/side-leap.webp",
-   "fw": 400,
-   "fh": 308,
+   "fw": 422,
+   "fh": 326,
    "cols": 4,
    "rows": 4,
    "frames": 16,
    "loop": false,
-   "anchorY": 0.9805,
+   "anchorY": 0.9816,
    "scaleAdjust": 0.5529,
    "shadowW": 187,
    "facing": "left",
-   "core": 155.3
+   "core": 165.0
   }
  },
  "walls": {
