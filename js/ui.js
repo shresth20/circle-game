@@ -3,6 +3,7 @@ window.ZD = window.ZD || {};
 
 (function () {
   const { el, svg } = ZD.util;
+  const M = ZD.motion;
   const T = (k, v) => ZD.T(k, v);
 
   /* Thumbnail of a piece inside a ghost circle (so a piece always reads as
@@ -33,7 +34,7 @@ window.ZD = window.ZD || {};
     _buildHud() {
       const h = this.hud;
       h.innerHTML = '';
-      // profile picture (assets/images/boy/profile.png via the asset pipeline)
+      // profile picture (circle-game-art/images/boy/profile.png via the asset pipeline)
       const portrait = el('div', { class: 'portrait', style: { backgroundImage: `url("${ZD.assets.imageUrl('profile')}")` } });
       // stage chip: "Wall 2/6" (set per wall by setStage)
       this.stageEl = el('div', { class: 'hud-stage' });
@@ -63,8 +64,8 @@ window.ZD = window.ZD || {};
       const text = T('hudStage', { n, total });
       if (this.stageEl.textContent === text) return;
       this.stageEl.textContent = text;
-      anime.remove(this.stageEl);
-      anime({ targets: this.stageEl, scale: [1.25, 1], duration: 380, easing: 'easeOutBack' });
+      M.stop(this.stageEl);
+      M.fromTo(this.stageEl, { scale: 1.25 }, { scale: 1, duration: M.DUR.SLOW, ease: M.EASE.POP });
     },
 
     /* ---------------- answer panel ----------------
@@ -129,16 +130,18 @@ window.ZD = window.ZD || {};
       this._placePanel();
       const box = this.optionsEl;
       const wasVisible = box.classList.contains('visible');
-      if (this.answerBtns) anime.remove(Object.values(this.answerBtns));
+      if (this.answerBtns) M.stop(Object.values(this.answerBtns));
       this._fillOptions(targetId);
       box.classList.remove('locked');
       const pills = Object.values(this.answerBtns);
       if (!wasVisible) {
         box.classList.add('visible');
-        anime.remove(box);
-        anime({ targets: box, translateX: [80, 0], opacity: [0, 1], duration: 300, easing: 'easeOutCubic' });
+        M.stop(box);
+        M.enter(box, { x: 80 });
       }
-      anime({ targets: pills, translateX: [40, 0], opacity: [0, 1], duration: 260, delay: anime.stagger(60, { start: wasVisible ? 0 : 80 }), easing: 'easeOutCubic' });
+      // once in, the pills hand their look back to the stylesheet (hover,
+      // press, picked, dimmed when locked)
+      M.enter(pills, { x: 40 }, { delay: wasVisible ? 0 : M.DUR.INSTANT, stagger: M.STAGGER.UI, clearProps: 'transform,opacity' });
       return new Promise((res) => (this._asking = res));
     },
     /* Stop accepting taps (time out / abort). */
@@ -150,19 +153,19 @@ window.ZD = window.ZD || {};
       const b = this.answerBtns && this.answerBtns[id];
       if (!b) return;
       b.classList.add(state);
-      if (state === 'reveal') anime({ targets: b, scale: [1, 1.08, 1], duration: 500, easing: 'easeOutBack' });
+      if (state === 'reveal') M.pulse(b, 1.08, { duration: M.DUR.SLOW, clearProps: 'transform' });
     },
     hideGrid(instant = false) {
       const box = this.optionsEl;
       this._asking = null;
       if (!box.classList.contains('visible')) return Promise.resolve();
       const pills = Object.values(this.answerBtns || {});
-      anime.remove([box, ...pills]);
+      M.stop([box, ...pills]);
       if (instant || !this._panelBuilt) {
         box.classList.remove('visible');
         return Promise.resolve();
       }
-      return anime({ targets: box, translateX: 80, opacity: 0, duration: 220, easing: 'easeInQuad' }).finished.then(() => box.classList.remove('visible'));
+      return M.exit(box, { x: 80 }).then(() => box.classList.remove('visible'));
     },
 
     /* ---------------- zombie timer meter ----------------
@@ -213,10 +216,10 @@ window.ZD = window.ZD || {};
       this._t = { faceW, lineL, lineR, travel: wallX + wallW * C.BRICKS - faceW * 0.82, seconds, left: null };
       box.classList.remove('danger');
       this.timerSet(0, 0);
-      anime.remove([box, this.tWall, this.tFaceImg]);
-      this.tWall.style.transform = '';
+      M.stop([box, this.tWall, this.tFaceImg]);
+      M.clear([this.tWall, this.tFaceImg], 'transform');
       box.classList.add('visible');
-      anime({ targets: box, translateY: [-40, 0], opacity: [0, 1], duration: 300, easing: 'easeOutCubic' });
+      M.enter(box, { y: -40 });
     },
     /* q 0..1 = how far the zombie has come; hop 0..1 = its stride bounce. */
     timerSet(q, hop) {
@@ -238,23 +241,24 @@ window.ZD = window.ZD || {};
     timerHit() {
       if (!this._t) return Promise.resolve();
       this.timerSet(1, 0);
-      anime.remove([this.tWall, this.tFaceImg]);
-      anime({ targets: this.tFaceImg, scaleX: [1.25, 1], scaleY: [0.8, 1], duration: 420, easing: 'easeOutElastic(1, .5)' });
-      return anime({ targets: this.tWall, translateX: [0, 12, -10, 7, -4, 0], rotate: [0, 3, -2, 1, 0, 0], duration: 520, easing: 'easeOutQuad' }).finished.then(() => this.timerHide());
+      M.stop([this.tWall, this.tFaceImg]);
+      // the face squashes on the bricks and springs back; the wall rattles
+      M.fromTo(this.tFaceImg, { scaleX: 1.25, scaleY: 0.8 }, { scaleX: 1, scaleY: 1, duration: M.DUR.SLOW, ease: M.EASE.POP });
+      return M.shake(this.tWall, { x: [0, 12, -10, 7, -4, 0], rotation: [0, 3, -2, 1, 0, 0] }, { duration: M.DUR.REVEAL }).then(() => this.timerHide());
     },
     timerHide(instant = false) {
       const box = this.timerEl;
       if (!box || !box.classList.contains('visible')) return Promise.resolve();
       this._t = null;
-      anime.remove(box);
+      M.stop(box);
       const done = () => box.classList.remove('visible', 'danger');
       if (instant) return Promise.resolve(done());
-      return anime({ targets: box, translateY: -30, opacity: 0, duration: 200, easing: 'easeInQuad' }).finished.then(done);
+      return M.exit(box, { y: -30 }).then(done);
     },
 
     /* ---------------- instruction bar ----------------
        Every line (the intro story, each step of a wall, rule reviews)
-       appears in ONE bar at the bottom: assets/images/banner.png,
+       appears in ONE bar at the bottom: circle-game-art/images/banner.png,
        stretched as a 9-slice (left cap = portrait socket, right cap =
        stripes; caps measured by tools/build-assets.py build_banner).  It sits
        right of the hero and under the answer panel.  The hero's face looks
@@ -366,7 +370,7 @@ window.ZD = window.ZD || {};
           const span = el('span', { class: 'w' + (hl ? ' hl' : ''), text: w });
           // hidden from the very first frame (no flash before the tween starts)
           span.style.opacity = '0';
-          span.style.transform = 'translateY(18px)'; // (the same function anime.js tweens: it replaces it)
+          span.style.transform = 'translateY(18px)'; // (= the tween's start: _showLine)
           line.appendChild(span);
           words.push(span);
         });
@@ -383,25 +387,26 @@ window.ZD = window.ZD || {};
       const old = Array.from(box.children).filter((n) => !n.classList.contains('leaving'));
       old.forEach((n) => {
         n.classList.add('leaving');
-        anime.remove(n.querySelectorAll('.w'));
-        anime({ targets: n, opacity: 0, translateY: -14, duration: 180, easing: 'easeInQuad', complete: () => n.remove() });
+        M.stop(n.querySelectorAll('.w'));
+        M.exit(n, { y: -14 }, { onComplete: () => n.remove() });
       });
       box.appendChild(line);
-      let delay = old.length ? 120 : 0;
+      // cross-fade: the new line starts halfway through the old one's exit
+      let delay = old.length ? M.DUR.FAST / 2 : 0;
       if (!barUp) {
-        anime.remove(b);
-        // hidden before it is shown, so it can never pop up for a frame
-        b.style.opacity = '0';
-        b.style.transform = 'translateY(60px)';
+        M.stop(b);
         b.classList.add('visible');
+        // hidden before it is shown, so it can never pop up for a frame
+        M.set(b, { y: 60, opacity: 0 });
       }
       this._fitLine(line); // (the bar is laid out now: measure the line)
       if (!barUp) {
-        anime({ targets: b, translateY: [60, 0], opacity: [0, 1], duration: 340, easing: 'easeOutCubic' });
-        delay = 140;
+        M.enter(b, { y: 60 });
+        delay = M.DUR.NORMAL / 2; // the words rise as the bar settles
       }
-      // the new sentence rises in word by word (ease-out)
-      anime({ targets: words, opacity: [0, 1], translateY: [18, 0], duration: 320, delay: anime.stagger(Math.max(18, Math.min(45, 600 / words.length)), { start: delay }), easing: 'easeOutCubic' });
+      // the new sentence rises in word by word (ease-out), the whole line
+      // in about 0.6 s whatever its length
+      M.enter(words, { y: 18 }, { delay, stagger: Math.max(0.018, Math.min(0.045, 0.6 / words.length)) });
     },
     /* Slide the bar away (the line stays in it until it is shown again). */
     hideBanner() {
@@ -412,14 +417,14 @@ window.ZD = window.ZD || {};
       this._busy = false;
       if (!b.classList.contains('visible') || this._barHiding) return Promise.resolve();
       this._barHiding = true;
-      anime.remove(b);
+      M.stop(b);
       const done = () => {
         if (!this._barHiding) return; // a new line arrived meanwhile
         this._barHiding = false;
         b.classList.remove('visible');
         this.barText.innerHTML = '';
       };
-      return anime({ targets: b, opacity: 0, translateY: 40, duration: 220, easing: 'easeInQuad' }).finished.then(done);
+      return M.exit(b, { y: 40 }).then(done);
     },
     /* Instant reset (restart / home): no bar, no queued lines. */
     clearGuide() {
@@ -427,7 +432,7 @@ window.ZD = window.ZD || {};
       this._lineId++;
       this._busy = false;
       this._barHiding = false;
-      anime.remove(this.bannerEl);
+      M.stop(this.bannerEl);
       this.bannerEl.classList.remove('visible');
       this.barText.innerHTML = '';
     },
@@ -460,7 +465,7 @@ window.ZD = window.ZD || {};
       if (buttons.length) p.appendChild(row);
       ov.appendChild(p);
       ov.classList.add('visible');
-      anime({ targets: p, scale: [0.85, 1], opacity: [0, 1], duration: 420, easing: 'easeOutBack' });
+      M.pop(p, { scale: 0.85 });
       return { el: ov, panel: p, body, result };
     },
     closePanel(id) {
@@ -470,7 +475,7 @@ window.ZD = window.ZD || {};
         ov.classList.remove('visible');
         return Promise.resolve();
       }
-      return anime({ targets: p, scale: 0.9, opacity: 0, duration: 200, easing: 'easeInQuad' }).finished.then(() => {
+      return M.exit(p, { scale: 0.9 }).then(() => {
         ov.classList.remove('visible');
         ov.innerHTML = '';
       });

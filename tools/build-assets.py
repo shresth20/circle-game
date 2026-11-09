@@ -2,8 +2,9 @@
 """
 Asset pipeline for "Zombie Defense: Parts of a Circle".
 
-Reads the raw art in  assets/images/  and writes game-ready WebP files plus a
-measured manifest to  assets/build/.
+Reads the raw art (about 134 MB of PNG, kept OUT of the shipped game) from
+../circle-game-art/images/ next to this repo - or from $CIRCLE_ART - and
+writes game-ready WebP files plus a measured manifest to  assets/build/.
 
 What it does
   * cleans sprite-sheet alpha (haze / halo removal, white-key for the zombie
@@ -31,7 +32,10 @@ from scipy import ndimage
 import sprite_stabilizer as S   # tools/sprite_stabilizer.py: frame-by-frame sprite registration
 
 ROOT = Path(__file__).resolve().parent.parent
-SRC = ROOT / "assets" / "images"
+# raw art lives outside the game folder so the shipped game stays small
+SRC = Path(os.environ.get("CIRCLE_ART") or ROOT.parent / "circle-game-art" / "images")
+if not SRC.is_dir():
+    sys.exit(f"raw art not found at {SRC} - clone/copy circle-game-art next to this repo or set CIRCLE_ART")
 OUT = ROOT / "assets" / "build"
 
 MANIFEST = {"version": 1, "images": {}, "sprites": {}, "walls": {}}
@@ -315,7 +319,7 @@ def build_layers():
     MANIFEST["images"]["roadPersp"] = {"src": save_opaque(road, "bg/road-persp.webp", 80), "w": road.shape[1], "h": road.shape[0]}
 
 
-# Bottom message bar (assets/images/banner.png): the purple plate with a round
+# Bottom message bar (circle-game-art/images/banner.png): the purple plate with a round
 # socket on the left.  Cropped to its content, faint fringe removed, the noisy
 # socket interior replaced by a dark disc (the hero portrait sits in it), and
 # halved.  The runtime stretches it as a 9-slice: the manifest records the
@@ -352,7 +356,7 @@ def build_banner():
 
 
 def build_start_button():
-    """Welcome-screen play button (assets/images/image copy.png, transparent:
+    """Welcome-screen play button (circle-game-art/images/image copy.png, transparent:
     the round yellow button with slime): cropped to its content, ~2x its
     230px display width.  Its disc (without the slime) spans 99.4% x 93.5%
     of the crop, centred at 49.9% / 50.5% - the CSS pulse rings use that."""
@@ -366,7 +370,7 @@ def build_start_button():
 
 
 def build_welcome():
-    """Welcome-screen logo (assets/images/welcome.png, transparent): cropped
+    """Welcome-screen logo (circle-game-art/images/welcome.png, transparent): cropped
     to its content and sized for a ~1200px-wide display.  The welcome
     background is the existing `roadPersp` (full-picture/image copy 5.png)."""
     arr = load("welcome.png")
@@ -379,7 +383,7 @@ def build_welcome():
 
 
 def build_gameover():
-    """Game-over sign (assets/images/gameover.png, transparent): the zombie
+    """Game-over sign (circle-game-art/images/gameover.png, transparent): the zombie
     peeking over the stone plate.  Cropped to its content, 1200 px wide; the
     runtime shows it ~1000 px wide over the zoomed-in defeat (game.gameOver).
     Replaces the old full-screen defeat illustration (gameOver)."""
@@ -394,7 +398,7 @@ def build_gameover():
 
 
 def build_profile():
-    """Hero profile picture (assets/images/boy/profile.png, opaque on purple):
+    """Hero profile picture (circle-game-art/images/boy/profile.png, opaque on purple):
     a square around the head, 256 px.  Shown in round frames (HUD portrait,
     message-bar socket), so the purple corners are simply clipped."""
     arr = load("boy/profile.png")[90:1110, 110:1130]
@@ -403,7 +407,7 @@ def build_profile():
 
 
 def build_timer():
-    """Zombie timer meter (assets/images/timer/, transparent).
+    """Zombie timer meter (circle-game-art/images/timer/, transparent).
     "image copy.png" holds two faces side by side - left the messy-haired
     road worker (skin 0), right the hard-hat worker (skin 1); the empty
     columns between them sit at x 858-992, so it is split at x 925.  Each face
@@ -467,7 +471,7 @@ def _mips(tex, levels=6):
     return out
 
 
-# The brick road art (assets/images/land/front-view road.png) is itself drawn in
+# The brick road art (circle-game-art/images/land/front-view road.png) is itself drawn in
 # perspective: its top surface is a trapezoid whose far / near width ratio
 # (292 / 769 = 0.38) matches FRONT_CAM between the wall's base (y 790) and the
 # stage bottom (y 1080).  A single homography therefore maps it onto the ground
@@ -694,7 +698,6 @@ def build_walls():
 # hero
 # --------------------------------------------------------------------------- #
 HERO_GRIDS = {
-    "sideThrow": "boy/ChatGPT Image Nov 5, 2026, 03_48_02 PM-1.png",
     "sideCheer": "boy/ChatGPT Image Nov 5, 2026, 03_48_04 PM-2.png",
     "sideFear": "boy/ChatGPT Image Nov 5, 2026, 03_48_07 PM-3.png",
     "sideRun": "boy/ChatGPT Image Nov 5, 2026, 03_48_09 PM-4.png",
@@ -900,8 +903,8 @@ def build_hero_leap():
 # zombies
 # --------------------------------------------------------------------------- #
 # Two zombie skins share one set of animation names: "zombie.*" is the
-# messy-haired road worker (assets/images/zombi-1), "zombie2.*" the hard-hat
-# worker (assets/images/zombi-2).  The runtime picks a skin per wall
+# messy-haired road worker (circle-game-art/images/zombi-1), "zombie2.*" the hard-hat
+# worker (circle-game-art/images/zombi-2).  The runtime picks a skin per wall
 # (ZD.Sprite.setSkin), so game code only ever names "zombie.<view>.<action>".
 #
 # The source sheets are AI-drawn: every figure is centred in its own cell and
@@ -1355,6 +1358,25 @@ def build_safe_zone():
 
 
 # --------------------------------------------------------------------------- #
+# Sheets the game never draws.  They are still built (so every shared
+# calibration - head scale, stand height, shadow size - sees the same frames
+# as before) but left out of the manifest and deleted, because the preloader
+# downloads every manifest entry.  To use one again, delete it here.
+UNUSED = {
+    "sprites": ["hero.backJump", "zombie.front.die", "zombie.front.dead", "zombie2.front.die", "zombie2.front.dead"],
+    "walls": ["angle2", "angle3"],
+}
+
+
+def drop_unused():
+    for sec, keys in UNUSED.items():
+        for key in keys:
+            entry = MANIFEST.get(sec, {}).pop(key, None)
+            if entry:
+                (OUT / entry["src"]).unlink(missing_ok=True)
+
+
+# --------------------------------------------------------------------------- #
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
     only = {"zombie": lambda: build_zombie(), "hero": lambda: build_hero(), "timer": lambda: build_timer(), "gameover": lambda: build_gameover(), "safezone": lambda: build_safe_zone()}
@@ -1368,6 +1390,7 @@ def main():
         build_walls()
         build_hero()
         build_zombie()
+    drop_unused()
     with open(OUT / "manifest.json", "w") as f:
         json.dump(MANIFEST, f, indent=1)
     # Classic-script copy so the game also runs from file:// (no fetch/CORS).

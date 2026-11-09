@@ -58,9 +58,6 @@
     voice(key) {
       return `assets/VO/${lang}/${key}.webm`;
     },
-    hasVoice(key) {
-      return voiceClips.has(key);
-    },
     /* Plays the line; resolves when it has finished (or was cut off / could
        not play).  Never rejects. */
     say(key, vars) {

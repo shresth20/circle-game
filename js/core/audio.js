@@ -1,4 +1,4 @@
-/* Procedural sound effects + read-aloud + looping theme music (assets/audio/theme-song.mp3).
+/* Procedural sound effects + read-aloud + looping theme music (assets/audio/theme-song.webm, .mp3 fallback).
    Every effect is synthesised with WebAudio, so the game needs no audio files
    and works offline.  say() is the read-aloud fallback used by I18n.say when
    no recorded clip exists (browser speech, in the current language). Replace any effect by editing the recipe in SFX below.
@@ -12,8 +12,10 @@ window.ZD = window.ZD || {};
   let sfxBus = null;
   let ambientNodes = null;
   /* Background theme: a looping music file, routed through the master gain
-     so mute / page-inactive silence it like every other sound. */
-  const MUSIC_SRC = 'assets/audio/theme-song.mp3';
+     so mute / page-inactive silence it like every other sound.
+     Opus/WebM (64 kbps, ~1.3 MB); the MP3 is only fetched by browsers that
+     cannot play WebM Opus (older iOS Safari). */
+  const MUSIC_SRC = new Audio().canPlayType('audio/webm; codecs="opus"') ? 'assets/audio/theme-song.webm' : 'assets/audio/theme-song.mp3';
   const MUSIC_VOL = 0.35;
   let musicEl = null;
   let musicBus = null;
@@ -93,7 +95,6 @@ window.ZD = window.ZD || {};
       tone({ type: 'square', freq: 523, dur: 0.08, vol: 0.12 });
       tone({ type: 'square', freq: 784, dur: 0.12, vol: 0.12, delay: 0.07 });
     },
-    tick: () => tone({ type: 'sine', freq: 1200, dur: 0.04, vol: 0.1 }),
     whoosh: () => {
       noise({ dur: 0.45, vol: 0.5, filter: 'bandpass', freq: 400, to: 2600, q: 0.8, attack: 0.06 });
       tone({ type: 'sine', freq: 180, to: 900, dur: 0.4, vol: 0.12 });
@@ -155,10 +156,6 @@ window.ZD = window.ZD || {};
       tone({ type: 'sawtooth', freq: 300, to: 180, dur: 0.3, vol: 0.18 });
       tone({ type: 'sawtooth', freq: 240, to: 120, dur: 0.45, vol: 0.18, delay: 0.25 });
     },
-    heart: () => {
-      tone({ type: 'square', freq: 440, to: 220, dur: 0.2, vol: 0.15 });
-      noise({ dur: 0.15, vol: 0.2, filter: 'highpass', freq: 3000 });
-    },
     siren: () => {
       for (let i = 0; i < 3; i++) {
         tone({ type: 'sawtooth', freq: 440, to: 880, dur: 0.6, vol: 0.09, attack: 0.1, delay: i * 1.2 });
@@ -174,11 +171,6 @@ window.ZD = window.ZD || {};
       tone({ type: 'sine', freq: 120, to: 60, dur: 0.07, vol: 0.2 });
     },
     swoosh: () => noise({ dur: 0.5, vol: 0.3, filter: 'bandpass', freq: 300, to: 1600, q: 0.7, attack: 0.1 }),
-    shield: () => {
-      tone({ type: 'sine', freq: 220, to: 880, dur: 0.9, vol: 0.2, attack: 0.1 });
-      tone({ type: 'triangle', freq: 330, to: 1320, dur: 0.9, vol: 0.1, attack: 0.1 });
-      noise({ dur: 1.0, vol: 0.15, filter: 'bandpass', freq: 800, to: 3200, q: 2, attack: 0.2 });
-    },
     unlock: () => {
       tone({ type: 'square', freq: 392, dur: 0.1, vol: 0.12 });
       tone({ type: 'square', freq: 523, dur: 0.1, vol: 0.12, delay: 0.1 });
@@ -197,21 +189,11 @@ window.ZD = window.ZD || {};
       [392, 370, 349, 330].forEach((f, i) => tone({ type: 'triangle', freq: f, dur: 0.5, vol: 0.2, delay: i * 0.42 }));
       tone({ type: 'sine', freq: 110, to: 55, dur: 2, vol: 0.2, delay: 1.5 });
     },
-    sparkle: () => {
-      for (let i = 0; i < 5; i++) tone({ type: 'sine', freq: 1500 + Math.random() * 2500, dur: 0.1, vol: 0.08, delay: i * 0.05 });
-    },
-    flip: () => {
-      tone({ type: 'sine', freq: 700, to: 1100, dur: 0.1, vol: 0.18 });
-      tone({ type: 'sine', freq: 1100, to: 1500, dur: 0.12, vol: 0.14, delay: 0.09 });
-    },
-    drag: () => tone({ type: 'sine', freq: 300 + Math.random() * 200, dur: 0.03, vol: 0.05 }),
     /* zombie timer: a soft heartbeat in the last seconds */
     heartbeat: () => {
       tone({ type: 'sine', freq: 70, to: 45, dur: 0.14, vol: 0.32 });
       tone({ type: 'sine', freq: 62, to: 40, dur: 0.16, vol: 0.24, delay: 0.2 });
     },
-    /* zombie hands scraping up the wall */
-    scrape: () => noise({ dur: 0.22, vol: 0.09, filter: 'bandpass', freq: 900, to: 500, q: 3, attack: 0.03 }),
     /* glass reseals with a new opening */
     reform: () => {
       [880, 1175, 1568].forEach((f, i) => tone({ type: 'sine', freq: f, dur: 0.16, vol: 0.1, delay: i * 0.06 }));
@@ -362,7 +344,9 @@ window.ZD = window.ZD || {};
       s.start(0);
     },
     play(name) {
-      if (!state.active || !ensure() || state.muted) return;
+      // muted first: a muted effect must not build the audio graph (creating
+      // the AudioContext is a ~100 ms main-thread stall)
+      if (!state.active || state.muted || !ensure()) return;
       if (ctx.state === 'suspended') ctx.resume();
       const fx = SFX[name];
       if (fx) fx();

@@ -69,7 +69,6 @@ button { font-family: inherit; }
 #world {
   position: absolute;
   inset: 0;
-  perspective: 1600px;
   /* fx.shake moves it: its own compositor layer, so a shake never repaints
      the grade / vignette gradients */
   will-change: transform;
@@ -83,10 +82,14 @@ button { font-family: inherit; }
   visibility: hidden;
   pointer-events: none;
   transform-origin: 50% 50%;
-  /* each view is always its own compositor layer, so the view swings
-     (Camera.to, Web Animations) never change the layer setup mid-flow: no
-     re-raster pop and no colour shift of the grade blended over it.  A
-     hidden view (visibility: hidden) is not painted at all. */
+  isolation: isolate;
+  /* Each view is a compositor layer for good.  Promoting a view only for
+     its swing (Camera.to) rebuilt the layer tree and re-rasterised every
+     tile of both views at the start and the end of the move - on a weak
+     GPU that shows as blurred / missing background tiles.  The hidden
+     view is visibility:hidden, so it costs no GPU memory.  Views are
+     only ever translated (never scaled), so a settled view is as sharp
+     as a freshly painted one. */
   will-change: transform, opacity;
 }
 .scene.active { opacity: 1; visibility: visible; }
@@ -178,7 +181,24 @@ button { font-family: inherit; }
   animation: alarmPulse 1.3s ease-in-out infinite alternate;
 }
 #world.alarm #alarm-light { opacity: 1; }
+/* no pulse while the light is off (it holds its value through the fade-out) */
+#world:not(.alarm) #alarm-light::before { animation-play-state: paused; }
 @keyframes alarmPulse { from { opacity: 0.45; } to { opacity: 1; } }
+/* Overlays cover only the visible stage (--ov-*, set by fitStage in
+   js/main.js) - less GPU area to rasterise and blend every frame.  The
+   gradients keep their design box (2560 x 1700 at -320, -300), so they look
+   exactly as before wherever they show. */
+#grade, #vignette, #alarm-light, .go-shade {
+  left: var(--ov-l, -320px);
+  top: var(--ov-t, -300px);
+  width: var(--ov-w, 2560px);
+  height: var(--ov-h, 1700px);
+}
+#grade, #vignette, #alarm-light::before {
+  background-size: 2560px 1700px;
+  background-position: calc(-320px - var(--ov-l, -320px)) calc(-300px - var(--ov-t, -300px));
+  background-repeat: no-repeat;
+}
 #flash {
   position: absolute;
   inset: -400px;
@@ -237,12 +257,32 @@ button { font-family: inherit; }
 .glass-ping-layer { opacity: 0; }
 
 /* ---------------- front-view camera rig ---------------- */
-/* always its own compositor layer: the camera moves (Web Animations) are
-   rasterised at their largest zoom and never re-rasterise when they stop */
-.cam-rig { position: absolute; inset: 0; transform-origin: 0 0; will-change: transform; }
+/* The rig is a compositor layer for good (FrontScene.frame animates its
+   transform; promoting it per move re-rasterised the whole view twice per
+   move).  Clip the 2560px-wide scenery to the 1920x1080 camera aperture
+   before compositing.  Without this clip, Retina screens rasterise a
+   >4096px transformed surface; its last GPU tile can arrive late as a flat
+   purple block at bottom-right. */
+.cam-rig { position: absolute; inset: 0; overflow: hidden; transform-origin: 0 0; will-change: transform; }
 /* darkens the edges while the camera focuses on the wall (outside the rig,
-   same box as #vignette; centre set in js/scene.js) */
-.focus-vignette { position: absolute; left: -320px; top: -300px; width: 2560px; height: 1700px; z-index: 40; opacity: 0; pointer-events: none; will-change: opacity; }
+   same box as #vignette; centre set in js/scene.js).  Its box is cut to
+   the visible stage like #vignette (--ov-*, fitStage in js/main.js): the
+   gradient keeps its 2560 x 1700 design box, the GPU only rasterises what
+   this screen shows. */
+.focus-vignette {
+  position: absolute;
+  left: var(--ov-l, -320px);
+  top: var(--ov-t, -300px);
+  width: var(--ov-w, 2560px);
+  height: var(--ov-h, 1700px);
+  background-size: 2560px 1700px;
+  background-position: calc(-320px - var(--ov-l, -320px)) calc(-300px - var(--ov-t, -300px));
+  background-repeat: no-repeat;
+  z-index: 40;
+  opacity: 0;
+  pointer-events: none;
+  will-change: opacity;
+}
 .glass-danger-layer { opacity: 0; }
 .glass-wrap.danger .glass-danger-layer { animation: dangerPulse 0.45s ease-in-out infinite alternate; }
 @keyframes dangerPulse { from { opacity: 0.1; } to { opacity: 0.85; } }
@@ -270,7 +310,8 @@ button { font-family: inherit; }
 }
 .zombie-hp .hp.gone { background: #2b1c3d; box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.6); opacity: 0.8; }
 .glass.cracked .glass-disc { filter: brightness(1.2); }
-.glass-lock { transform-origin: center; transform-box: fill-box; }
+/* (.glass-lock scales about its centre: GSAP sets an SVG element's origin
+   itself, so no transform-origin / transform-box here) */
 
 @keyframes blink { from { opacity: 1; } to { opacity: 0.35; } }
 
@@ -475,8 +516,11 @@ button { font-family: inherit; }
 #timer {
   position: absolute;
   top: 18px;
-  left: 50%;
-  translate: -50% 0;
+  /* centred by margins (width set from JS): its show / hide tween owns the
+     transform, and GSAP folds a CSS `translate` into it as fixed px */
+  left: 0;
+  right: 0;
+  margin: 0 auto;
   z-index: 71;
   pointer-events: none;
   visibility: hidden;
@@ -616,11 +660,13 @@ button { font-family: inherit; }
 
 /* Message bar (bottom): banner.png as a 9-slice - js/ui.js _buildBar sets
    the border-image, its cap widths and the 160px height.  Centred horizontally on the stage.
-   (Its show / hide motion animates transform; centring uses translate.) */
+   (Its show / hide motion animates transform; centring uses margins, so
+   it stays centred when the bar narrows in the front view.) */
 .msgbar {
   position: absolute;
-  left: 50%;
-  translate: -50% 0;
+  left: 0;
+  right: 0;
+  margin: 0 auto;
   width: 1160px;
   bottom: 12px;
   border-style: solid;
@@ -783,7 +829,7 @@ button { font-family: inherit; }
 .welcome-slot .bar > div { background: linear-gradient(90deg, #7cff8a, #2fbf4e); }
 .welcome-slot .loader-text { font-size: 28px; font-weight: 800; opacity: 1; text-shadow: 0 2px 6px rgba(0, 0, 0, 0.7); }
 
-/* play button: the art (assets/images/image copy.png) over a soft glow,
+/* play button: the art (circle-game-art/images/image copy.png) over a soft glow,
    with a gentle "tap me" heartbeat; it lifts on hover and sinks on press.
    The disc box (left/top/width/height) is measured in build_start_button. */
 .play-btn {
@@ -948,14 +994,10 @@ button { font-family: inherit; }
    #vignette so 20:9 screens are covered too. */
 .go-shade {
   position: absolute;
-  left: -320px;
-  top: -300px;
-  width: 2560px;
-  height: 1700px;
   opacity: 0;
   pointer-events: none;
   background:
-    radial-gradient(ellipse 48% 50% at 50% 42%, rgba(46, 12, 78, 0) 30%, rgba(22, 6, 44, 0.62) 100%),
+    radial-gradient(ellipse 48% 50% at 50% 42%, rgba(46, 12, 78, 0) 30%, rgba(22, 6, 44, 0.62) 100%) calc(-320px - var(--ov-l, -320px)) calc(-300px - var(--ov-t, -300px)) / 2560px 1700px no-repeat,
     rgba(52, 18, 92, 0.48);
 }
 .go-rays {
@@ -993,9 +1035,11 @@ button { font-family: inherit; }
 }
 .go-retry {
   position: absolute;
-  left: 50%;
+  left: 0;
+  right: 0;
+  width: fit-content;
+  margin: 0 auto; /* centred by margins: its pop-in tween owns the transform */
   top: 738px;
-  translate: -50% 0;
   display: flex;
   align-items: center;
   gap: 18px;

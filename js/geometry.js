@@ -79,10 +79,6 @@ window.ZD = window.ZD || {};
     polar,
     rad,
     normalize,
-    complement(spec) {
-      const s = normalize(spec);
-      return normalize({ type: s.type, start: s.start + s.sweep, sweep: 360 - s.sweep });
-    },
     /* SVG path for a piece.  rotOffset rotates the piece about the centre. */
     piecePath(spec, cx, cy, r, rotOffset = 0, thickRatio = 0.26) {
       const s = normalize(spec);
@@ -101,39 +97,14 @@ window.ZD = window.ZD || {};
       }
     },
     arcStroke,
-    /* Boundary helpers for lesson overlays. */
-    radiiPaths(spec, cx, cy, r, rotOffset = 0) {
-      const s = normalize(spec);
-      const p0 = polar(cx, cy, r, s.start + rotOffset);
-      const p1 = polar(cx, cy, r, s.start + rotOffset + s.sweep);
-      return [`M ${f(cx)} ${f(cy)} L ${f(p0.x)} ${f(p0.y)}`, `M ${f(cx)} ${f(cy)} L ${f(p1.x)} ${f(p1.y)}`];
-    },
-    chordLine(spec, cx, cy, r, rotOffset = 0) {
-      const s = normalize(spec);
-      const p0 = polar(cx, cy, r, s.start + rotOffset);
-      const p1 = polar(cx, cy, r, s.start + rotOffset + s.sweep);
-      return `M ${f(p0.x)} ${f(p0.y)} L ${f(p1.x)} ${f(p1.y)}`;
-    },
-    endpoints(spec, cx, cy, r, rotOffset = 0) {
-      const s = normalize(spec);
-      return [polar(cx, cy, r, s.start + rotOffset), polar(cx, cy, r, s.start + rotOffset + s.sweep)];
-    },
     /* The six answers, in grid order (rows = size, columns = type). */
     PIECES: ['minor-arc', 'minor-sector', 'minor-segment', 'major-arc', 'major-sector', 'major-segment'],
     idOf: (spec) => normalize(spec).id,
     /* i18n keys for a piece (spec or id like 'major-sector'):
          piece*  name      MINOR SECTOR
-         rule*   one-line rule, repeated on the walk to the next wall
-         reason* why the opening is that piece (shown after a mistake) */
+         rule*   one-line rule, repeated on the walk to the next wall */
     labelKey: (p) => I18n.key('piece', pieceId(p)),
     ruleKey: (p) => I18n.key('rule', pieceId(p)),
-    reasonKey: (p) => I18n.key('reason', pieceId(p)),
-    /* A canonical spec for a piece id (button icons, lessons). */
-    specOf(id, dir = -90) {
-      const [size, type] = id.split('-');
-      const sweep = size === 'minor' ? 100 : 260;
-      return normalize({ type, sweep, start: dir - sweep / 2 });
-    },
     /* Correctness is decided from data, never from pixels. */
     matches: (a, b) => pieceId(a) === pieceId(b),
     /* Mid-angle of a piece, handy for placing labels. */
@@ -141,7 +112,6 @@ window.ZD = window.ZD || {};
       const s = normalize(spec);
       return s.start + rotOffset + s.sweep / 2;
     },
-    sweepOf: (spec) => normalize(spec).sweep,
   };
 
   ZD.geo = geo;

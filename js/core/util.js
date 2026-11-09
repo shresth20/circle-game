@@ -45,7 +45,6 @@ window.ZD = window.ZD || {};
       return n;
     },
     clamp: (v, a, b) => Math.max(a, Math.min(b, v)),
-    lerp: (a, b, t) => a + (b - a) * t,
     rand: (a = 0, b = 1) => a + Math.random() * (b - a),
     randInt: (a, b) => Math.floor(a + Math.random() * (b - a + 1)),
     pick: (arr) => arr[Math.floor(Math.random() * arr.length)],
@@ -57,14 +56,9 @@ window.ZD = window.ZD || {};
       }
       return a;
     },
-    rad: (deg) => (deg * Math.PI) / 180,
     easeOutCubic: (t) => 1 - Math.pow(1 - t, 3),
     nextFrame: () => new Promise((r) => requestAnimationFrame(() => r())),
     wait: (ms) => ZD.clock.wait(ms),
-    fmtPct: (v) => `${Math.round(v * 100)}%`,
-    once(target, type) {
-      return new Promise((res) => target.addEventListener(type, res, { once: true }));
-    },
   };
 
   /* A clock whose timeouts can be paused (pause menu) and resumed. */
@@ -73,7 +67,7 @@ window.ZD = window.ZD || {};
   const clock = {
     paused: false,
     /* Pause a Web Animation with the game (camera moves run on the
-       compositor via element.animate, outside anime.js). */
+       compositor via element.animate, outside GSAP). */
     track(anim) {
       waapi.add(anim);
       const drop = () => waapi.delete(anim);
@@ -119,12 +113,8 @@ window.ZD = window.ZD || {};
           t.remaining = Math.max(0, t.remaining - (now - t.start));
         }
       });
-      // anime.js drops paused instances from anime.running on the next frame,
-      // so remember them here or resume() would never restart them
-      if (window.anime) {
-        clock.frozen = anime.running.slice();
-        clock.frozen.forEach((a) => a.pause());
-      }
+      // every GSAP tween stops where it is (ZD.motion.thaw carries it on)
+      ZD.motion.freeze();
       waapi.forEach((a) => {
         if (a.playState === 'running' || a.pending) {
           a.pause();
@@ -139,9 +129,7 @@ window.ZD = window.ZD || {};
       timers.forEach((t) => {
         if (!t.id && !t.done) t.arm();
       });
-      // (skip tweens that were deliberately stopped while paused: a._killed)
-      if (window.anime) (clock.frozen || []).forEach((a) => !a.completed && !a._killed && a.play());
-      clock.frozen = [];
+      ZD.motion.thaw();
       waapi.forEach((a) => {
         if (a._clockPaused) {
           a._clockPaused = false;

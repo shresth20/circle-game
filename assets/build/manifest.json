@@ -296,17 +296,6 @@
   }
  },
  "sprites": {
-  "hero.sideThrow": {
-   "src": "hero/sideThrow.webp",
-   "fw": 366,
-   "fh": 348,
-   "cols": 4,
-   "rows": 3,
-   "frames": 12,
-   "anchorY": 0.9368,
-   "loop": false,
-   "shadowW": 181
-  },
   "hero.sideCheer": {
    "src": "hero/sideCheer.webp",
    "fw": 208,
@@ -395,17 +384,6 @@
    "loop": true,
    "shadowW": 181
   },
-  "hero.backJump": {
-   "src": "hero/backJump.webp",
-   "fw": 292,
-   "fh": 358,
-   "cols": 4,
-   "rows": 3,
-   "frames": 12,
-   "anchorY": 0.9497,
-   "loop": false,
-   "shadowW": 181
-  },
   "hero.sideLeap": {
    "src": "hero/sideLeap.webp",
    "fw": 420,
@@ -485,18 +463,6 @@
    "scaleAdjust": 0.4394,
    "shadowW": 182
   },
-  "zombie.front.die": {
-   "src": "zombie/front-die.webp",
-   "fw": 302,
-   "fh": 324,
-   "cols": 4,
-   "rows": 4,
-   "frames": 16,
-   "loop": false,
-   "anchorY": 0.9784,
-   "scaleAdjust": 0.4394,
-   "shadowW": 182
-  },
   "zombie.front.hit": {
    "src": "zombie/front-hit.webp",
    "fw": 300,
@@ -506,18 +472,6 @@
    "frames": 8,
    "loop": false,
    "anchorY": 0.9787,
-   "scaleAdjust": 0.4394,
-   "shadowW": 182
-  },
-  "zombie.front.dead": {
-   "src": "zombie/front-dead.webp",
-   "fw": 256,
-   "fh": 224,
-   "cols": 1,
-   "rows": 1,
-   "frames": 1,
-   "loop": false,
-   "anchorY": 0.9732,
    "scaleAdjust": 0.4394,
    "shadowW": 182
   },
@@ -663,18 +617,6 @@
    "scaleAdjust": 0.4394,
    "shadowW": 182
   },
-  "zombie2.front.die": {
-   "src": "zombie2/front-die.webp",
-   "fw": 302,
-   "fh": 348,
-   "cols": 4,
-   "rows": 4,
-   "frames": 16,
-   "loop": false,
-   "anchorY": 0.9799,
-   "scaleAdjust": 0.4394,
-   "shadowW": 182
-  },
   "zombie2.front.hit": {
    "src": "zombie2/front-hit.webp",
    "fw": 260,
@@ -684,18 +626,6 @@
    "frames": 8,
    "loop": false,
    "anchorY": 0.9821,
-   "scaleAdjust": 0.4394,
-   "shadowW": 182
-  },
-  "zombie2.front.dead": {
-   "src": "zombie2/front-dead.webp",
-   "fw": 274,
-   "fh": 234,
-   "cols": 1,
-   "rows": 1,
-   "frames": 1,
-   "loop": false,
-   "anchorY": 0.9744,
    "scaleAdjust": 0.4394,
    "shadowW": 182
   },
@@ -831,48 +761,6 @@
     "rx": 76.7,
     "ry": 130.9,
     "rot": 3.0
-   }
-  },
-  "angle2": {
-   "src": "wall/angle2.webp",
-   "w": 272,
-   "h": 663,
-   "hole": {
-    "cx": 101.8,
-    "cy": 321.9,
-    "rx": 37.5,
-    "ry": 122.0
-   },
-   "base": {
-    "far": {
-     "x": 1,
-     "y": 577
-    },
-    "near": {
-     "x": 202,
-     "y": 661
-    }
-   }
-  },
-  "angle3": {
-   "src": "wall/angle3.webp",
-   "w": 200,
-   "h": 676,
-   "hole": {
-    "cx": 64.4,
-    "cy": 334.0,
-    "rx": 13.5,
-    "ry": 78.0
-   },
-   "base": {
-    "far": {
-     "x": 3,
-     "y": 586
-    },
-    "near": {
-     "x": 130,
-     "y": 674
-    }
    }
   }
  }

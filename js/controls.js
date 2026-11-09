@@ -9,6 +9,7 @@ window.ZD = window.ZD || {};
 
 (function () {
   const { el } = ZD.util;
+  const M = ZD.motion;
   const T = (k, v) => ZD.T(k, v);
 
   const ICON_RUN =
@@ -142,8 +143,8 @@ window.ZD = window.ZD || {};
       const btns = [this.runBtn, this.jumpBtn];
       btns.forEach((b) => b.classList.remove('hint'));
       this.box.classList.add('visible');
-      anime.remove(btns);
-      return anime({ targets: btns, translateY: [160, 0], opacity: [0, 1], duration: 380, delay: anime.stagger(90), easing: 'easeOutBack' }).finished;
+      M.stop(btns);
+      return M.pop(btns, { y: 160 }, { duration: M.DUR.SLOW, stagger: M.STAGGER.STEP });
     },
 
     hide() {
@@ -151,8 +152,8 @@ window.ZD = window.ZD || {};
       this._release();
       if (!this.box.classList.contains('visible')) return Promise.resolve();
       const btns = [this.runBtn, this.jumpBtn];
-      anime.remove(btns);
-      return anime({ targets: btns, translateY: 160, opacity: 0, duration: 240, easing: 'easeInQuad' }).finished.then(() => {
+      M.stop(btns);
+      return M.exit(btns, { y: 160 }, { duration: M.DUR.NORMAL }).then(() => {
         if (!this.active) this.box.classList.remove('visible');
       });
     },
@@ -163,7 +164,7 @@ window.ZD = window.ZD || {};
       this._release();
       if (!this.box) return;
       const btns = [this.runBtn, this.jumpBtn];
-      anime.remove(btns);
+      M.stop(btns);
       btns.forEach((b) => {
         b.classList.remove('hint');
         b.style.opacity = 0;

@@ -10,12 +10,14 @@
      7. run and jump    - the hand holds RUN, then taps JUMP
      8. the wrong answer- the glass breaks and the zombie gets through
      9. the route       - walls -> Safe Zone, START MISSION
-   Motion is transform / opacity only, time-based (anime.js / Web
-   Animations), and every element is hidden before it is first shown. */
+   Motion is transform / opacity only, time-based (GSAP via ZD.motion /
+   Web Animations), and every element is hidden before it is first shown. */
 window.ZD = window.ZD || {};
 
 (function () {
   const { el, wait, nextFrame } = ZD.util;
+  const M = ZD.motion;
+  const { DUR, EASE, PHYS } = M;
   const T = (k, v) => ZD.T(k, v);
   const D = (ms) => ZD.scene.D(ms);
 
@@ -50,48 +52,48 @@ window.ZD = window.ZD || {};
     node.style.opacity = '0';
     ring.style.opacity = '0';
     apply();
-    const tween = (o, ms, easing) => {
-      anime.remove(st);
-      return anime(Object.assign({ targets: st, duration: D(ms), easing, update: apply }, o)).finished;
+    const tween = (o, ms, ease) => {
+      M.stop(st);
+      return M.to(st, Object.assign({ ms: D(ms), ease, onUpdate: apply }, o));
     };
     return {
       el: node,
       /* glide in from below the screen to `p` */
       enter(p, ms = 900) {
-        anime.remove(node);
+        M.stop(node);
         if (node.style.opacity === '0') {
           st.x = p.x + 160;
           st.y = 1240;
           st.s = 1;
           apply();
         }
-        anime({ targets: node, opacity: 1, duration: D(260), easing: 'easeOutQuad' });
-        return tween({ x: p.x, y: p.y }, ms, 'easeOutCubic');
+        M.to(node, { opacity: 1, ms: D(260), ease: EASE.OUT });
+        return tween({ x: p.x, y: p.y }, ms, EASE.OUT);
       },
       moveTo(p, ms = 700) {
-        return tween({ x: p.x, y: p.y }, ms, 'easeInOutCubic');
+        return tween({ x: p.x, y: p.y }, ms, EASE.INOUT);
       },
       async tap() {
-        await tween({ s: 0.84 }, 120, 'easeInQuad');
+        await tween({ s: 0.84 }, 120, EASE.IN);
         ZD.audio.play('click');
         // a ring opens under the fingertip
-        // (placed by left/top, which never animate: anime owns its transform)
-        anime.remove(ring);
+        // (placed by left/top, which never animate: GSAP owns its transform)
+        M.stop(ring);
         ring.style.left = st.x - 40 + 'px';
         ring.style.top = st.y - 40 + 'px';
-        anime({ targets: ring, opacity: [0.95, 0], scale: [0.3, 1.5], duration: D(520), easing: 'easeOutCubic' });
-        await tween({ s: 1 }, 220, 'easeOutBack');
+        M.fromTo(ring, { opacity: 0.95, scale: 0.3 }, { opacity: 0, scale: 1.5, ms: D(520), ease: PHYS.BURST });
+        await tween({ s: 1 }, 220, EASE.POP);
       },
       press() {
-        return tween({ s: 0.86 }, 140, 'easeInQuad');
+        return tween({ s: 0.86 }, 140, EASE.IN);
       },
       release() {
-        return tween({ s: 1 }, 200, 'easeOutBack');
+        return tween({ s: 1 }, 200, EASE.POP);
       },
       hide() {
-        anime.remove(node);
-        anime({ targets: node, opacity: 0, duration: D(240), easing: 'easeInQuad' });
-        return tween({ y: st.y + 120 }, 260, 'easeInQuad');
+        M.stop(node);
+        M.to(node, { opacity: 0, ms: D(240), ease: EASE.IN });
+        return tween({ y: st.y + 120 }, 260, EASE.IN);
       },
     };
   }
@@ -122,7 +124,7 @@ window.ZD = window.ZD || {};
       const loader = document.getElementById('loader');
       const logoArt = A.image('welcomeLogo');
       const logo = el('div', { class: 'welcome-logo', role: 'img', 'aria-label': T('appTitle'), style: { backgroundImage: `url("${A.imageUrl('welcomeLogo')}")`, aspectRatio: `${logoArt.w} / ${logoArt.h}` } });
-      // play button art (assets/images/image copy.png via build_start_button)
+      // play button art (circle-game-art/images/image copy.png via build_start_button)
       // over a soft glow; .play-art takes hover / press, its inner .play-img
       // does the gentle "tap me" heartbeat (CSS)
       const art = el('span', { class: 'play-art' }, [el('span', { class: 'play-img', style: { backgroundImage: `url("${A.imageUrl('startButton')}")` } })]);
@@ -133,12 +135,13 @@ window.ZD = window.ZD || {};
         // swap: the logo is already showing; the loading bar gives way to the button
         logo.style.opacity = 1;
         const slot = loader.querySelector('.welcome-slot');
-        await anime({ targets: slot, opacity: 0, scale: 0.92, duration: 220, easing: 'easeInQuad' }).finished.then(() => loader.remove());
+        await M.exit(slot, { scale: 0.92 });
+        loader.remove();
       }
-      if (!loader) anime({ targets: logo, translateY: [-80, 0], scale: [0.85, 1], opacity: [0, 1], duration: 900, easing: 'easeOutElastic(1, .7)' });
-      anime({ targets: btn, scale: [0.3, 1], opacity: [0, 1], duration: 520, delay: loader ? 0 : 550, easing: 'easeOutBack' });
-      // idle: the logo floats (transform only)
-      loops.push(anime({ targets: logo, translateY: [0, -10], duration: 1800, delay: loader ? 0 : 950, direction: 'alternate', loop: true, easing: 'easeInOutSine' }));
+      if (!loader) M.pop(logo, { y: -80, scale: 0.85 }, { duration: DUR.REVEAL });
+      M.pop(btn, { scale: 0.3 }, { duration: DUR.SLOW, delay: loader ? 0 : DUR.SLOW });
+      // idle: the logo floats (transform only), a slow breath
+      loops.push(M.fromTo(logo, { y: 0 }, { y: -10, duration: DUR.IDLE, delay: loader ? 0 : DUR.REVEAL, ease: PHYS.GLIDE, yoyo: true, repeat: -1, immediateRender: false }));
       await new Promise((res) => {
         const go = () => {
           ZD.audio.unlock();
@@ -149,10 +152,10 @@ window.ZD = window.ZD || {};
         };
         btn.addEventListener('click', go, { once: true });
       });
-      loops.forEach((a) => a.pause());
-      anime.remove([logo, btn, art]);
-      anime({ targets: btn, scale: [1, 0.9], duration: 120, easing: 'easeInQuad' });
-      await anime({ targets: [logo, btn], opacity: 0, duration: 300, delay: 80, easing: 'easeInQuad' }).finished;
+      loops.forEach((a) => a.kill());
+      M.stop([logo, btn, art]);
+      M.to(btn, { scale: 0.9, duration: DUR.FAST, ease: EASE.IN });
+      await M.exit([logo, btn], null, { duration: DUR.NORMAL, delay: DUR.INSTANT });
       ov.classList.remove('visible', 'welcome');
       ov.innerHTML = '';
     },
@@ -184,7 +187,7 @@ window.ZD = window.ZD || {};
       ov.append(curtain);
       const hand = demoHand(ov);
       ov.append(skipBtn);
-      anime({ targets: skipBtn, opacity: [0, 1], duration: D(400), delay: D(600), easing: 'easeOutQuad' });
+      M.enter(skipBtn, null, { ms: D(400), delayMs: D(600) });
 
       const SKIP = { skip: true };
       let skipped = false;
@@ -225,7 +228,7 @@ window.ZD = window.ZD || {};
         const placeHorde = (k) => horde.forEach((z, i) => z.setPos(spots[i].x0 + (spots[i].x1 - spots[i].x0) * k - scroll, spots[i].y));
         placeHorde(0);
         const run = { k: 0 };
-        const hordeIn = anime({ targets: run, k: 1, duration: D(3200), easing: 'easeOutQuad', update: () => placeHorde(run.k) }).finished.then(() => {
+        const hordeIn = M.to(run, { k: 1, ms: D(3200), ease: PHYS.DECEL, onUpdate: () => placeHorde(run.k) }).then(() => {
           horde.forEach((z) => z.play({ sheet: 'zombie.side.idle', fps: 7, loop: true }));
         });
         let line = say('storyAttack', { kind: 'alert' });
@@ -241,13 +244,13 @@ window.ZD = window.ZD || {};
         side.prepareRun(PAN, { gate: true });
         const cam = { x: 0 };
         const pan = (to, ms) => {
-          anime.remove(cam);
-          return anime({ targets: cam, x: to, duration: D(ms), easing: 'easeInOutSine', update: () => {
+          M.stop(cam);
+          return M.to(cam, { x: to, ms: D(ms), ease: PHYS.GLIDE, onUpdate: () => {
             scroll = cam.x;
             side.setScroll(cam.x);
             side.hero.setPos(side.heroHome.x - cam.x, side.heroHome.y);
             placeHorde(1);
-          } }).finished;
+          } });
         };
         heroIdle();
         say('storySafe1');
@@ -255,7 +258,7 @@ window.ZD = window.ZD || {};
         await pause(700);
         // the horde stays behind at the wall: it fades as the camera leaves
         // it (no zombie may seem to stand at the Safe Zone)
-        anime({ targets: horde.map((z) => z.el), opacity: 0, duration: D(700), delay: D(300), easing: 'easeInQuad' });
+        M.to(horde.map((z) => z.el), { opacity: 0, ms: D(700), delayMs: D(300), ease: EASE.IN });
         await step(pan(PAN, 2800));
         side.clearHorde();
         horde.length = 0; // (the pan back has none to move)
@@ -268,10 +271,13 @@ window.ZD = window.ZD || {};
         side.removeGate();
         side.zombieOffset = 0;
         side.setScroll(0);
+        // the front view (step 4) is painted now, unseen, so it swings in
+        // with every tile ready
+        camera.prewarm('front', { shot: 'focus' });
         side.zombie.el.style.opacity = '0';
         side.zombie.show(true);
         side.zombie.play({ sheet: 'zombie.side.idle', fps: 7, loop: true });
-        await step(anime({ targets: side.zombie.el, opacity: [0, 1], duration: D(600), easing: 'easeOutQuad' }).finished);
+        await step(M.enter(side.zombie.el, null, { ms: D(600) }));
         side.zombie.el.style.opacity = '';
         await step(line);
 
@@ -352,7 +358,7 @@ window.ZD = window.ZD || {};
 
         /* ---- 8. the wrong answer ------------------------------------ */
         await step(ui.hideBanner());
-        await step(anime({ targets: world, opacity: 0, duration: D(420), easing: 'easeInQuad' }).finished);
+        await step(M.exit(world, null, { ms: D(420) }));
         // out of sight: the wall again, with the other zombie and a new gap
         const t2 = geo.normalize({ type: 'segment', sweep: 120, start: 30 }); // minor segment, pointing down
         ZD.scene.setZombieSkin(1);
@@ -380,7 +386,7 @@ window.ZD = window.ZD || {};
         front.frame('focus', { duration: 0 });
         front.glass.lightUp();
         await nextFrame(); // the new frame is drawn before it fades in
-        await step(anime({ targets: world, opacity: [0, 1], duration: D(500), easing: 'easeOutQuad' }).finished);
+        await step(M.enter(world, null, { ms: D(500) }));
         world.style.opacity = '';
         ui.ask(t2.id);
         line = say('storyWrong1', { kind: 'alert' });
@@ -426,30 +432,30 @@ window.ZD = window.ZD || {};
         map.append(chain, startBtn);
         ov.insertBefore(map, curtain);
         ov.classList.remove('pass'); // the map takes the taps (START)
-        await step(anime({ targets: map, opacity: [0, 1], duration: D(600), easing: 'easeOutQuad' }).finished);
+        await step(M.enter(map, null, { ms: D(600) }));
         world.classList.remove('alarm');
-        anime({ targets: chain.children, scale: [0.6, 1], opacity: [0, 1], duration: D(420), delay: anime.stagger(110), easing: 'easeOutBack' });
+        M.pop(chain.children, { scale: 0.6 }, { ms: D(420), stagger: D(110) / 1000 });
         items.concat(safe).forEach((_, i) => ZD.clock.timeout(() => ZD.audio.play('pop'), i * 220));
         say('storyGoal1', { vars: { n: nWalls }, kind: 'good' });
         line = say('storyGoal2', { kind: 'good' });
         await pause(chain.children.length * 110 + 300);
-        await step(anime({ targets: startBtn, scale: [0.6, 1], opacity: [0, 1], duration: D(600), easing: 'easeOutBack' }).finished);
-        anime({ targets: skipBtn, opacity: 0, duration: D(200), easing: 'easeInQuad' });
+        await step(M.pop(startBtn, { scale: 0.6 }, { ms: D(600) }));
+        M.exit(skipBtn, null, { ms: D(200) });
         await step(new Promise((res) => startBtn.addEventListener('click', () => {
           ZD.audio.play('unlock');
           res();
         }, { once: true })));
-        anime.remove(startBtn);
-        await Promise.all([anime({ targets: startBtn, scale: 0.92, duration: 120, easing: 'easeInQuad' }).finished, ui.hideBanner()]);
+        M.stop(startBtn);
+        await Promise.all([M.to(startBtn, { scale: 0.92, duration: DUR.FAST, ease: EASE.IN }), ui.hideBanner()]);
         cover = map;
       } catch (e) {
         if (e !== SKIP) throw e;
         // Skip: a new epoch (the demo's half-done steps abort at their next
         // guard), and a dark curtain over the scene
         E = ++G.epoch;
-        anime.remove(curtain);
+        M.stop(curtain);
         ui.hideBanner();
-        await anime({ targets: curtain, opacity: 1, duration: 320, easing: 'easeInQuad' }).finished;
+        await M.to(curtain, { opacity: 1, duration: DUR.NORMAL, ease: EASE.IN });
         cover = curtain;
       }
 
@@ -461,7 +467,7 @@ window.ZD = window.ZD || {};
       ZD.scene.setZombieSkin(0);
       await nextFrame();
       await nextFrame();
-      await anime({ targets: cover, opacity: 0, duration: D(600), easing: 'easeInOutQuad' }).finished;
+      await M.to(cover, { opacity: 0, ms: D(600), ease: EASE.INOUT });
       ov.className = 'overlay';
       ov.innerHTML = '';
       stage.classList.remove('intro-on', 'demo');

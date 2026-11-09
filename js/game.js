@@ -12,6 +12,8 @@ window.ZD = window.ZD || {};
 
 (function () {
   const { el, wait, shuffle } = ZD.util;
+  const M = ZD.motion;
+  const { EASE, PHYS } = M;
   const T = (k, v) => ZD.T(k, v);
   const geo = ZD.geo;
   const fx = () => ZD.scene.fx;
@@ -34,8 +36,8 @@ window.ZD = window.ZD || {};
   /* Game-over camera (game.defeatCam): zoom, and where the fallen boy's
      body lands on screen (stage px) - centred across, low on screen,
      under the centred sign + Replay button */
-  const DEFEAT_ZOOM = 1.5;
   const DEFEAT_FOCUS = { x: 960, y: 960 };
+  const DEFEAT_SHIFT = { x: 260, y: 90 };
   const REPLAY_ICON = '<svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.34-5.66" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/><path d="M20.5 3.5v5h-5" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
   /* Openings for one wall (all of the wall's piece): shuffled, refilled
@@ -134,12 +136,7 @@ window.ZD = window.ZD || {};
       ZD.clock.resume();
       this.paused = false;
       // (keep the kept overlays' own tweens - e.g. the intro curtain)
-      const kept = keep.map((id) => document.getElementById(id));
-      anime.running.slice().forEach((a) => {
-        if (a.loop) return;
-        if (kept.length && a.animatables.some((x) => x.target instanceof Node && kept.some((k) => k.contains(x.target)))) return;
-        a.pause();
-      });
+      M.stopAll({ keep: keep.map((id) => document.getElementById(id)) });
       I18n.stop();
       ['title', 'intro', 'pause', 'complete', 'gameover', 'lesson'].forEach((id) => {
         if (keep.includes(id)) return;
@@ -177,7 +174,7 @@ window.ZD = window.ZD || {};
       side.clearHorde();
       side.removeGate();
       side.walls.forEach((w, i) => {
-        anime.remove(w.glass.el); // (prepareRetry's cross-fade)
+        M.stop(w.glass.el); // (prepareRetry's cross-fade)
         w.glass.el.style.opacity = '';
         w.glass.restore();
         w.offset = 0;
@@ -260,6 +257,10 @@ window.ZD = window.ZD || {};
     async wallTitle(wall) {
       const { side, camera } = ZD.scene;
       if (camera.current !== 'side') camera.cut('side');
+      // the front view is painted now, unseen, at the shot the swing will
+      // reveal: by the time the view swings (seconds from now) its images
+      // are decoded and its tiles rastered, so nothing pops in mid-move
+      camera.prewarm('front', { shot: 'focus' });
       // short lines, one at a time
       const keys = wall.retry ? ['guideRetry', 'guideRetry2'] : wall.n === wall.total ? ['guideWallLast'] : ['guideWall', 'guideZombie'];
       wall.coach = wall.n === 1 || !!wall.retry;
@@ -433,8 +434,10 @@ window.ZD = window.ZD || {};
        3. the camera rides with the piece into the wall (then the outcome,
           and the view swings to the side at the window) */
     async throwFront(spec, target, correct, E, { final = true, hpIndex = 0 } = {}) {
-      const { front } = ZD.scene;
+      const { front, camera } = ZD.scene;
       const P = front.projectile;
+      // the side view is painted now, unseen: the outcome swings to it
+      camera.prewarm('side');
       P.setSpec(spec, 0);
       P.show(false);
       ZD.audio.play('pick');
@@ -463,7 +466,7 @@ window.ZD = window.ZD || {};
       await P.fly({
         from, to, ctrl,
         duration: D(900),
-        easing: 'easeInSine',
+        ease: PHYS.RAMP,
         scaleFrom: 1.25, scaleTo: 1.0,
         rotFrom: -40, rotTo: 0, spin: correct ? 20 : 35,
         onProgress: (t) => {
@@ -483,10 +486,7 @@ window.ZD = window.ZD || {};
         fx().ring(front.fxLayer, to.x, to.y, '#7CFF8A', 80);
         fx().flash('#9dffb0', 300, 0.35);
         front.popZombieHp(hpIndex);
-        await anime({ targets: P.el, scale: [1, 0.5], opacity: [1, 0], duration: D(320), easing: 'easeInQuad' }).finished;
-        P.el.style.opacity = '';
-        P.el.style.transform = '';
-        P.show(false);
+        await P.vanish({ to: { scale: 0.5 }, ms: D(320), ease: PHYS.ACCEL });
         if (final) {
           await ZD.scene.camera.to('side', { zoomAt: to });
           return;
@@ -513,11 +513,8 @@ window.ZD = window.ZD || {};
         fx().flash('#ff3b5c', 320, 0.3);
         fx().shake(12, 480);
         front.hero.play({ sheet: 'hero.backFear', fps: 14 }).then(() => front.hero.setFrame(11));
-        anime({ targets: P.el, translateX: '-=120', translateY: '+=320', rotate: '-=140', opacity: [1, 0], duration: D(520), easing: 'easeInQuad', complete: () => {
-          P.el.style.transform = '';
-          P.el.style.opacity = '';
-          P.show(false);
-        } });
+        // it bounces off and drops away, turning
+        P.vanish({ to: { x: P.x - 120, y: P.y + 320, rot: P.rot - 140 }, ms: D(520), ease: PHYS.ACCEL });
         ZD.audio.play('fail');
         // the camera creeps in on the cracked glass: the zombie is coming
         front.frame('lock', { duration: 900, easing: 'easeOutCubic' });
@@ -530,7 +527,8 @@ window.ZD = window.ZD || {};
 
     /* Time out: the zombie reaches the glass and bangs until it cracks. */
     async timeUpFront(E) {
-      const { front } = ZD.scene;
+      const { front, camera } = ZD.scene;
+      camera.prewarm('side'); // the view swings to the side after the bang
       ZD.ui.hideGrid();
       ZD.audio.play('alarm');
       front.hero.play({ sheet: 'hero.backFear', fps: 14 }).then(() => front.hero.setFrame(11));
@@ -551,52 +549,14 @@ window.ZD = window.ZD || {};
       await ZD.scene.camera.to('side', { zoomAt: front.hole });
     },
 
-    /* Demo throw used by the intro (side camera).  Correct: the piece passes
-       the circle and knocks the zombie out.  Wrong: it bounces off and cracks
-       the glass. */
-    async sideThrowDemo(spec, correct = true) {
-      const { side } = ZD.scene;
-      const P = side.projectile;
-      P.setSpec(spec, 0);
-      side.hero.play({ sheet: 'hero.sideThrow', fps: 18 }).then(() => side.hero.play({ sheet: 'hero.sideIdle', fps: 9, loop: true }));
-      await wait(7 / 18 * 1000);
-      ZD.audio.play('whoosh');
-      const from = side.heroHand;
-      const to = { x: side.hole.x, y: side.hole.y };
-      await P.fly({ from, to, ctrl: { x: (from.x + to.x) / 2, y: to.y - 90 }, duration: D(650), easing: 'easeInSine', scaleFrom: 1.0, scaleTo: 0.8, sxFrom: 0.9, sxTo: 0.45, rotTo: 0, spin: 10 });
-      if (!correct) {
-        side.wall.glass.highlight('bad');
-        side.wall.glass.crack(0, 0);
-        ZD.audio.play('crack');
-        fx().shards(side.fxLayer, to.x, to.y, 12);
-        fx().shake(8, 300);
-        await anime({ targets: P.el, translateX: '-=160', translateY: '+=300', rotate: '-=140', opacity: [1, 0], duration: D(520), easing: 'easeInQuad' }).finished;
-        P.el.style.transform = '';
-        P.el.style.opacity = '';
-        P.show(false);
-        return;
-      }
-      side.wall.glass.highlight('good');
-      ZD.audio.play('pass');
-      fx().sparkles(side.fxLayer, to.x, to.y, 12, '#c7ffd8');
-      await this.sideFlightToZombie(P);
-      await this.zombieHit();
-      side.hero.play({ sheet: 'hero.sideCheer', fps: 12 }).then(() => side.hero.play({ sheet: 'hero.sideIdle', fps: 9, loop: true }));
-      ZD.audio.play('yay');
-      await wait(D(500));
-    },
 
     async sideFlightToZombie(P) {
       const { side } = ZD.scene;
       const from = { x: side.hole.x + 40, y: side.hole.y };
       const to = { x: side.zombie.x - 40, y: side.groundY - 150 };
       ZD.audio.play('whoosh');
-      await P.fly({ from, to, ctrl: { x: (from.x + to.x) / 2, y: to.y - 50 }, duration: D(460), easing: 'linear', scaleFrom: 0.8, scaleTo: 1.0, sxFrom: 0.45, sxTo: 0.95, spin: 60 });
-      anime({ targets: P.el, scale: [1, 0.2], opacity: [1, 0], duration: D(260), easing: 'easeOutQuad', complete: () => {
-        P.el.style.transform = '';
-        P.el.style.opacity = '';
-        P.show(false);
-      } });
+      await P.fly({ from, to, ctrl: { x: (from.x + to.x) / 2, y: to.y - 50 }, duration: D(460), ease: PHYS.LINEAR, scaleFrom: 0.8, scaleTo: 1.0, sxFrom: 0.45, sxTo: 0.95, spin: 60 });
+      P.vanish({ to: { scale: 0.2 }, ms: D(260), ease: PHYS.DECEL });
     },
 
     async zombieHit() {
@@ -610,7 +570,7 @@ window.ZD = window.ZD || {};
       fx().shake(6, 300);
       const o = { d: 0 };
       const baseX = z.x;
-      anime({ targets: o, d: 90, duration: D(500), easing: 'easeOutQuad', update: () => z.setPos(baseX + o.d, z.y) });
+      M.to(o, { d: 90, ms: D(500), ease: PHYS.DECEL, onUpdate: () => z.setPos(baseX + o.d, z.y) });
       await z.play({ sheet: 'zombie.side.hit', fps: 16 });
       ZD.audio.play('groan');
       await z.play({ sheet: 'zombie.side.die', fps: 15 });
@@ -747,7 +707,7 @@ window.ZD = window.ZD || {};
         t = 0;
         manual('hero.sideLeap', 1);
         // the knocked-out zombie fades as the hero goes for the window
-        anime({ targets: zombie.el, opacity: 0, duration: 500, easing: 'easeInQuad' });
+        M.to(zombie.el, { opacity: 0, ms: D(500), ease: EASE.IN });
       };
       const startLeap = () => {
         const core = side.heroLeapCore;
@@ -787,7 +747,7 @@ window.ZD = window.ZD || {};
         tell(gate ? 'guideClearedLast' : 'guideCleared', { kind: 'good' });
         // the next checkpoint has no zombie yet: it walks in when the hero
         // has arrived (wallTitle -> side.zombieWalkIn)
-        anime.remove(zombie.el);
+        M.stop(zombie.el);
         onPass && onPass();
         side.sendZombieTo(distance, false);
       };
@@ -932,11 +892,11 @@ window.ZD = window.ZD || {};
     async heroJumpThrough({ beforeLeap } = {}) {
       const { side } = ZD.scene;
       const hero = side.hero;
-      anime({ targets: side.zombie.el, opacity: 0, duration: D(500), easing: 'easeInQuad' });
+      M.to(side.zombie.el, { opacity: 0, ms: D(500), ease: EASE.IN });
       const takeoff = side.hole.x - 330;
       const landing = side.hole.x + 330;
       // run-up: picks up speed into the take-off, legs locked to the road
-      await side.heroRunTo(takeoff, { easing: beforeLeap ? 'easeInOutSine' : 'easeInSine', ramp: 0.35 });
+      await side.heroRunTo(takeoff, { ease: beforeLeap ? PHYS.GLIDE : PHYS.RAMP, ramp: 0.35 });
       if (beforeLeap) {
         hero.play({ sheet: 'hero.sideIdle', fps: 9, loop: true });
         await beforeLeap();
@@ -994,7 +954,7 @@ window.ZD = window.ZD || {};
       z.play({ sheet: 'zombie.side.run', fps: 16, loop: true });
       const runTo = side.hole.x + 300;
       const o = { x: z.x };
-      await anime({ targets: o, x: runTo, duration: D(520), easing: 'easeInQuad', update: () => z.setPos(o.x, side.zombieHome.y) }).finished;
+      await M.to(o, { x: runTo, ms: D(520), ease: PHYS.ACCEL, onUpdate: () => z.setPos(o.x, side.zombieHome.y) });
       if (E != null) this.guard(E);
       // leap through the circle (zombie.side.leap: 0-1 crouch, 2-6 airborne,
       // 7-11 land, 12-14 attack-ready) - the glass breaks as the head hits it
@@ -1054,7 +1014,7 @@ window.ZD = window.ZD || {};
       if (E != null) this.guard(E);
       z.play({ sheet: 'zombie.side.run', fps: 14, loop: true });
       const stepIn = { x: z.x };
-      await anime({ targets: stepIn, x: side.heroHome.x + 115, duration: D(420), easing: 'easeInOutSine', update: () => z.setPos(stepIn.x, side.zombieHome.y) }).finished;
+      await M.to(stepIn, { x: side.heroHome.x + 115, ms: D(420), ease: PHYS.GLIDE, onUpdate: () => z.setPos(stepIn.x, side.zombieHome.y) });
       if (E != null) this.guard(E);
       z.play({ sheet: 'zombie.side.attack', fps: 12, loop: true });
       await fall;
@@ -1108,20 +1068,21 @@ window.ZD = window.ZD || {};
       // 1. push in on the boy and the zombie; the shade comes up as the
       //    camera settles, then the rays open behind where the sign lands
       this.defeatCam();
-      anime({ targets: shade, opacity: [0, 1], duration: D(700), delay: D(450), easing: 'easeOutQuad' });
-      anime({ targets: rays, scale: [0.35, 1], opacity: [0, 1], duration: D(800), delay: D(850), easing: 'easeOutCubic' });
+      M.enter(shade, null, { ms: D(700), delayMs: D(450) });
+      M.enter(rays, { scale: 0.35 }, { ms: D(800), delayMs: D(850) });
       // 2. the sign drops in and lands with a thump (the bar, which said
       //    what the gap was, makes way for it)
       await wait(D(950));
       this.guard(E);
       ZD.ui.hideBanner();
       ZD.audio.play('swoosh');
-      await anime({ targets: sign, translateY: [-160, 0], scale: [0.55, 1], opacity: { value: [0, 1], duration: D(220), easing: 'linear' }, duration: D(620), easing: 'easeOutBack' }).finished;
+      M.fromTo(sign, { opacity: 0 }, { opacity: 1, ms: D(220), ease: PHYS.LINEAR });
+      await M.fromTo(sign, { y: -160, scale: 0.55 }, { y: 0, scale: 1, ms: D(620), ease: EASE.POP });
       this.guard(E);
       ZD.audio.play('thud');
       fx().shake(9, 320);
       // 3. Replay pops up under it
-      await anime({ targets: btn, translateY: [70, 0], scale: [0.7, 1], opacity: [0, 1], duration: D(480), easing: 'easeOutBack' }).finished;
+      await M.pop(btn, { y: 70, scale: 0.7 }, { ms: D(480) });
       this.guard(E);
       btn.focus({ preventScroll: true });
       // behind the game-over screen the wall is already set for the retry
@@ -1134,9 +1095,9 @@ window.ZD = window.ZD || {};
       this.guard(E);
       // leave: the sign and button go, the camera eases back out
       ZD.audio.play('swoosh');
-      anime({ targets: [sign, btn], opacity: 0, scale: 0.85, duration: D(240), easing: 'easeInQuad' });
+      M.exit([sign, btn], { scale: 0.85 }, { ms: D(240) });
       const out = this.defeatCamOut(D(650));
-      await anime({ targets: [shade, rays], opacity: 0, duration: D(500), delay: D(150), easing: 'easeInQuad' }).finished;
+      await M.exit([shade, rays], null, { ms: D(500), delayMs: D(150) });
       await out;
       this.guard(E);
       ov.className = 'overlay';
@@ -1157,39 +1118,35 @@ window.ZD = window.ZD || {};
       const { side, front } = ZD.scene;
       const target = (wall.next = this.deckFor(wall).next());
       const g = side.wall.glass;
-      await anime({ targets: g.el, opacity: 0, duration: D(200), easing: 'easeInQuad' }).finished;
+      await M.exit(g.el, null, { ms: D(200) });
       g.restore();
       side.setTarget(target);
       front.glass.restore();
       front.setTarget(target);
-      await anime({ targets: g.el, opacity: [0, 1], duration: D(320), easing: 'easeOutQuad' }).finished;
+      await M.enter(g.el, null, { ms: D(320) });
       g.el.style.opacity = '';
     },
 
-    /* Camera push-in on the defeat (side view): one compositor move (Web
-       Animation, transform only, ease-out) centred on the boy lying flat
-       (the zombie over him), under the sign.  It holds (fill) until
-       defeatCamOut() / clearDefeatCam(). */
+    /* Camera drift on the defeat (side view): one compositor move (Web
+       Animation, transform only, ease-out) toward the fallen boy.  Do not
+       scale the whole scene here: a 1.5x full-screen background was the
+       second place where browsers could show stretched/low-resolution GPU
+       tiles.  The shade and sign provide the visual push-in instead. */
     defeatCam() {
       const { side } = ZD.scene;
-      const s = DEFEAT_ZOOM;
       // the boy's body: he lies flat to the left of where he stood
       // (hero.sideFall last frame), head to the left
       const bx = side.hero.x - 120;
       const by = side.hero.y - 35;
-      // centre him - but never slide the view past the scenery's left edge
-      // (stage x -320) where the screen shows it (wider than 16:9 shows
-      // more than the stage)
-      const k = Math.min(window.innerWidth / 1920, window.innerHeight / 1080);
-      const visLeft = Math.min(0, 960 - window.innerWidth / (2 * k));
-      const tx = Math.min(DEFEAT_FOCUS.x - s * bx, 320 * s + visLeft);
-      const ty = DEFEAT_FOCUS.y - s * by;
+      // Drift only as far as the oversized scenery safely covers.  This
+      // moves attention toward the action without exposing a scene edge.
+      const tx = Math.max(-DEFEAT_SHIFT.x, Math.min(DEFEAT_SHIFT.x, DEFEAT_FOCUS.x - bx));
+      const ty = Math.max(-DEFEAT_SHIFT.y, Math.min(DEFEAT_SHIFT.y, DEFEAT_FOCUS.y - by));
       this.clearDefeatCam();
       const v = side.el;
-      this._defeatTo = `translate(${tx}px, ${ty}px) scale(${s})`;
-      v.style.transformOrigin = '0 0';
+      this._defeatTo = `translate(${tx}px, ${ty}px)`;
       this._defeatCamAnim = ZD.clock.track(v.animate(
-        [{ transform: 'translate(0px, 0px) scale(1)' }, { transform: this._defeatTo }],
+        [{ transform: 'translate(0px, 0px)' }, { transform: this._defeatTo }],
         { duration: D(1400), easing: 'cubic-bezier(0.22, 1, 0.36, 1)', fill: 'forwards' }
       ));
       return this._defeatCamAnim;
@@ -1199,7 +1156,7 @@ window.ZD = window.ZD || {};
     async defeatCamOut(ms) {
       if (!this._defeatCamAnim) return;
       const back = ZD.clock.track(ZD.scene.side.el.animate(
-        [{ transform: this._defeatTo }, { transform: 'translate(0px, 0px) scale(1)' }],
+        [{ transform: this._defeatTo }, { transform: 'translate(0px, 0px)' }],
         { duration: ms, easing: 'cubic-bezier(0.65, 0, 0.35, 1)', fill: 'forwards' }
       ));
       this._defeatCamAnim.cancel();
@@ -1211,7 +1168,6 @@ window.ZD = window.ZD || {};
     clearDefeatCam() {
       if (this._defeatCamAnim) this._defeatCamAnim.cancel();
       this._defeatCamAnim = null;
-      ZD.scene.side.el.style.transformOrigin = '';
     },
 
     resetAfterGameOver() {

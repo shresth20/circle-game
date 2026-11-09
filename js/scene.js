@@ -13,6 +13,8 @@ window.ZD = window.ZD || {};
 (function () {
   const { el, svg, rand, randInt, pick, clamp, wait } = ZD.util;
   const A = ZD.assets;
+  const M = ZD.motion;
+  const { EASE, PHYS } = M;
 
   const STAGE_W = 1920;
   // one zombie footstep (ms): the walk's bounce and step sounds, both views
@@ -27,7 +29,7 @@ window.ZD = window.ZD || {};
   const HERO_RUN_SPEED = 690; // px/s, full running speed (side view)
   const RUN_CONTACT = [5, 10]; // frames where a foot lands (step sound + dust)
   const STAGE_H = 1080;
-  /* Finale building (assets/images/safe-zone.png): a watchtower and walls
+  /* Finale building (circle-game-art/images/safe-zone.png): a watchtower and walls
      with an open gateway and a lit corridor inside.  Boxes are in the built
      image's pixels.  Sized from the boy, not the screen: the gateway is
      ~1.2x his height (a ~270 px boy, a ~330 px opening), so the top of the
@@ -79,9 +81,9 @@ window.ZD = window.ZD || {};
   const settings = {};
   const D = (ms) => ms;
 
-  /* CSS easings for the compositor camera moves (Web Animations), named
-     like the anime.js ones they replace.  glide = a long camera move: soft
-     start, long gentle landing. */
+  /* CSS easings for the compositor camera moves (Web Animations: they run
+     off the main thread, so a busy frame never stutters the camera).
+     glide = a long camera move: soft start, long gentle landing. */
   const CAM_EASE = {
     linear: 'linear',
     easeInQuad: 'cubic-bezier(0.11, 0, 0.5, 0)',
@@ -127,7 +129,10 @@ window.ZD = window.ZD || {};
     const tileH = Math.round(img.h * sc);
     const height = h || tileH;
     const period = mirror ? tileW * 2 : tileW;
-    const count = Math.ceil((WORLD_W + period) / tileW) + 1;
+    // just enough tiles: the world, plus one wrap period if it scrolls (the
+    // offset stays in [0, period)).  Every extra tile is layer area the GPU
+    // rasterises and keeps - a still layer needs no spare at all.
+    const count = Math.ceil((WORLD_W + (factor ? period : 0)) / tileW);
     const node = el('div', {
       class: 'layer tiled ' + cls,
       style: { left: WORLD_X + 'px', top: y + 'px', width: tileW * count + 'px', height: height + 'px', zIndex: z, opacity, backgroundColor: bg || 'transparent', willChange: scrollLayer(factor) },
@@ -607,10 +612,10 @@ window.ZD = window.ZD || {};
       this.restore();
       this.setTarget(spec);
       ZD.audio.play('reform');
-      anime.remove([this.gOpen, this.lock]);
+      M.stop([this.gOpen, this.lock]);
       this.lock.setAttribute('stroke', '#bfe9ff');
-      anime({ targets: this.lock, opacity: [0.9, 0], scale: [0.86, 1.08], duration: D(520), easing: 'easeOutCubic', complete: () => this.lock.setAttribute('stroke', '#7CFF8A') });
-      await anime({ targets: this.gOpen, opacity: [0, 1], duration: D(420), delay: D(120), easing: 'easeOutQuad' }).finished;
+      M.fromTo(this.lock, { opacity: 0.9, scale: 0.86, transformOrigin: '50% 50%' }, { opacity: 0, scale: 1.08, ms: D(520), ease: EASE.OUT, onComplete: () => this.lock.setAttribute('stroke', '#7CFF8A') });
+      await M.enter(this.gOpen, null, { ms: D(420), delayMs: D(120) });
     }
 
     /* 'picked' | 'approach' | 'good' | 'bad' | 'idle' (rim-light colour) */
@@ -660,15 +665,15 @@ window.ZD = window.ZD || {};
         p.style.strokeDasharray = L;
         p.style.strokeDashoffset = L;
       });
-      anime({ targets: lines, strokeDashoffset: 0, duration: D(420), easing: 'easeOutQuart', delay: anime.stagger(18) });
-      anime({ targets: this.tint, opacity: [0, 0.55, 0.3], duration: D(500), easing: 'easeOutQuad' });
+      M.to(lines, { strokeDashoffset: 0, ms: D(420), ease: EASE.OUT, stagger: D(18) / 1000 });
+      M.to(this.tint, { keyframes: { opacity: [0, 0.55, 0.3], easeEach: PHYS.DECEL }, ms: D(500) });
       this.svg.classList.add('cracked');
     }
 
     /* Whole glass breaks away (breach / game over). */
     shatter() {
       this.svg.classList.add('shattered');
-      anime({ targets: [this.gGlass, this.cracks, this.rim, this.center], opacity: 0, duration: D(250), easing: 'linear' });
+      M.to([this.gGlass, this.cracks, this.rim, this.center], { opacity: 0, ms: D(250), ease: PHYS.LINEAR });
       this._openParts.forEach((n) => (n.style.display = 'none'));
       this.setDanger(false);
     }
@@ -678,9 +683,9 @@ window.ZD = window.ZD || {};
       this._openParts.forEach((n) => (n.style.display = 'none'));
       this.setDanger(false);
       this.cut.setAttribute('d', '');
-      await anime({ targets: this.lock, opacity: [0, 1], scale: [1, 1.08], duration: D(420), easing: 'easeOutCubic' }).finished;
-      anime({ targets: this.lock, opacity: 0, duration: D(500), easing: 'linear' });
-      await anime({ targets: [this.gGlass, this.rim, this.center], opacity: 0, duration: D(500), easing: 'easeInQuad' }).finished;
+      await M.fromTo(this.lock, { opacity: 0, scale: 1, transformOrigin: '50% 50%' }, { opacity: 1, scale: 1.08, ms: D(420), ease: EASE.OUT });
+      M.to(this.lock, { opacity: 0, ms: D(500), ease: PHYS.LINEAR });
+      await M.to([this.gGlass, this.rim, this.center], { opacity: 0, ms: D(500), ease: EASE.IN });
     }
 
     restore() {
@@ -691,7 +696,7 @@ window.ZD = window.ZD || {};
         n.style.opacity = '';
         n.removeAttribute('opacity');
       });
-      anime.remove(this.gOpen);
+      M.stop(this.gOpen);
       this.gOpen.style.opacity = '';
       [this._lightAnim, this._pingAnim].forEach((a) => a && a.cancel());
       this._lightAnim = this._pingAnim = null;
@@ -700,7 +705,7 @@ window.ZD = window.ZD || {};
       this.tint.style.opacity = '';
       this.lock.setAttribute('opacity', '0');
       this.lock.style.opacity = '';
-      this.lock.style.transform = '';
+      M.clear(this.lock, 'transform');
       this.setTarget(this.spec);
     }
   }
@@ -766,16 +771,18 @@ window.ZD = window.ZD || {};
      * Fly along a quadratic bezier.  from/to/ctrl: {x,y}; returns promise.
      * onProgress(t, pos) lets callers react (e.g. alignment lock-on).
      */
-    fly({ from, to, ctrl, duration, scaleFrom = 1, scaleTo = 1, rotFrom = 0, rotTo = 0, spin = 0, sxFrom = 1, sxTo = 1, easing = 'easeInQuad', onProgress }) {
+    fly({ from, to, ctrl, duration, scaleFrom = 1, scaleTo = 1, rotFrom = 0, rotTo = 0, spin = 0, sxFrom = 1, sxTo = 1, ease = PHYS.ACCEL, onProgress }) {
       const o = { t: 0 };
+      // drawn at the start of the arc before it shows (no stale frame)
+      this.el.style.opacity = '';
+      this.set(from.x, from.y, scaleFrom, rotFrom, sxFrom);
       this.show(true);
       let prev = from;
-      return anime({
-        targets: o,
+      return M.to(o, {
         t: 1,
-        duration,
-        easing,
-        update: () => {
+        ms: duration,
+        ease,
+        onUpdate: () => {
           const t = o.t;
           const mt = 1 - t;
           const x = mt * mt * from.x + 2 * mt * t * ctrl.x + t * t * to.x;
@@ -790,7 +797,31 @@ window.ZD = window.ZD || {};
           prev = { x, y };
           onProgress && onProgress(t, { x, y });
         },
-      }).finished;
+      });
+    }
+
+    /* The piece goes: it fades out as it moves to `to` (any of x, y, scale,
+       rot), then hides.  Moved through set(), so its transform stays this
+       object's own. */
+    vanish({ to, ms, ease }) {
+      const a = { x: this.x, y: this.y, scale: this.scale, rot: this.rot };
+      const b = Object.assign({}, a, to);
+      const o = { t: 0 };
+      return M.to(o, {
+        t: 1,
+        ms,
+        ease,
+        onUpdate: () => {
+          const t = o.t;
+          this.set(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.scale + (b.scale - a.scale) * t, a.rot + (b.rot - a.rot) * t, 1);
+          this.el.style.opacity = String(1 - t);
+        },
+        onComplete: () => {
+          this.el.style.opacity = '';
+          this.el.style.transform = '';
+          this.show(false);
+        },
+      });
     }
   }
 
@@ -804,15 +835,15 @@ window.ZD = window.ZD || {};
         container.appendChild(s);
         const ang = rand(0, Math.PI * 2);
         const dist = rand(90, 320);
-        anime({
-          targets: s,
-          translateX: Math.cos(ang) * dist,
-          translateY: [Math.sin(ang) * dist * 0.6, Math.sin(ang) * dist * 0.6 + rand(120, 260)],
-          rotate: rand(-540, 540),
-          opacity: [1, 0],
-          duration: D(rand(650, 1000)),
-          easing: 'easeOutQuad',
-          complete: () => s.remove(),
+        const sy = Math.sin(ang) * dist * 0.6;
+        M.fromTo(s, { x: 0, y: sy, rotation: 0, opacity: 1 }, {
+          x: Math.cos(ang) * dist,
+          y: sy + rand(120, 260),
+          rotation: rand(-540, 540),
+          opacity: 0,
+          ms: D(rand(650, 1000)),
+          ease: PHYS.DECEL,
+          onComplete: () => s.remove(),
         });
       }
     },
@@ -822,13 +853,13 @@ window.ZD = window.ZD || {};
         container.appendChild(s);
         const ang = rand(0, Math.PI * 2);
         const dist = rand(60, 220);
-        anime({ targets: s, translateX: Math.cos(ang) * dist, translateY: Math.sin(ang) * dist, scale: [rand(0.8, 1.6), 0], opacity: [1, 0], duration: D(rand(500, 900)), easing: 'easeOutCubic', complete: () => s.remove() });
+        M.fromTo(s, { scale: rand(0.8, 1.6), opacity: 1 }, { x: Math.cos(ang) * dist, y: Math.sin(ang) * dist, scale: 0, opacity: 0, ms: D(rand(500, 900)), ease: PHYS.BURST, onComplete: () => s.remove() });
       }
     },
     ring(container, x, y, color = '#ffd166', size = 60) {
       const r = el('div', { class: 'ring', style: { left: x + 'px', top: y + 'px', width: size + 'px', height: size + 'px', marginLeft: -size / 2 + 'px', marginTop: -size / 2 + 'px', borderColor: color } });
       container.appendChild(r);
-      anime({ targets: r, scale: [0.3, 4], opacity: [0.9, 0], duration: D(600), easing: 'easeOutCubic', complete: () => r.remove() });
+      M.fromTo(r, { scale: 0.3, opacity: 0.9 }, { scale: 4, opacity: 0, ms: D(600), ease: PHYS.BURST, onComplete: () => r.remove() });
     },
     puffs(container, x, y, n = 7) {
       for (let i = 0; i < n; i++) {
@@ -836,22 +867,14 @@ window.ZD = window.ZD || {};
         container.appendChild(p);
         const ang = rand(0, Math.PI * 2);
         const dist = rand(30, 110);
-        anime({ targets: p, translateX: Math.cos(ang) * dist, translateY: Math.sin(ang) * dist - 30, scale: [0.4, rand(1.2, 2.2)], opacity: [0.9, 0], duration: D(rand(500, 800)), easing: 'easeOutQuad', complete: () => p.remove() });
+        M.fromTo(p, { scale: 0.4, opacity: 0.9 }, { x: Math.cos(ang) * dist, y: Math.sin(ang) * dist - 30, scale: rand(1.2, 2.2), opacity: 0, ms: D(rand(500, 800)), ease: PHYS.DECEL, onComplete: () => p.remove() });
       }
     },
     /* a little road dust behind running feet: drifts back and up, fades */
     dust(container, x, y, dir = 1) {
       const p = el('div', { class: 'puff dust', style: { left: x + 'px', top: y + 'px' } });
       container.appendChild(p);
-      anime({ targets: p, translateX: -dir * rand(50, 110), translateY: -rand(10, 34), scale: [0.45, rand(1.5, 2.1)], opacity: [0.85, 0], duration: D(rand(420, 620)), easing: 'easeOutQuad', complete: () => p.remove() });
-    },
-    stars(container, x, y, n = 5, dur = 1800) {
-      const g = el('div', { class: 'dizzy', style: { left: x + 'px', top: y + 'px' } });
-      for (let i = 0; i < n; i++) g.appendChild(el('span', { text: '★', style: { transform: `rotate(${(360 / n) * i}deg) translateX(44px)` } }));
-      container.appendChild(g);
-      anime({ targets: g, rotate: 720, duration: dur, easing: 'linear' });
-      anime({ targets: g, opacity: [0, 1, 1, 0], duration: dur, easing: 'linear', complete: () => g.remove() });
-      return g;
+      M.fromTo(p, { scale: 0.45, opacity: 0.85 }, { x: -dir * rand(50, 110), y: -rand(10, 34), scale: rand(1.5, 2.1), opacity: 0, ms: D(rand(420, 620)), ease: PHYS.DECEL, onComplete: () => p.remove() });
     },
     /* Full-screen colour wash: ramps up in ~70 ms and fades out (an instant
        jump to full strength reads as a strobe / flicker).  Compositor
@@ -873,14 +896,11 @@ window.ZD = window.ZD || {};
     },
     shake(intensity = 10, dur = 420) {
       const w = document.getElementById('world');
-      anime.remove(w);
-      anime({
-        targets: w,
-        translateX: [0, intensity, -intensity, intensity * 0.6, -intensity * 0.6, 0],
-        translateY: [0, -intensity * 0.5, intensity * 0.5, -intensity * 0.3, 0],
-        duration: dur,
-        easing: 'easeOutQuad',
-      });
+      M.stop(w);
+      M.shake(w, {
+        x: [0, intensity, -intensity, intensity * 0.6, -intensity * 0.6, 0],
+        y: [0, -intensity * 0.5, intensity * 0.5, -intensity * 0.3, 0],
+      }, { ms: D(dur) });
     },
   };
 
@@ -1075,7 +1095,7 @@ window.ZD = window.ZD || {};
       };
       // vignette centred on the window as framed while focused
       // (#world-sized box: 2560 x 1700 from (-320, -300), as #vignette)
-      this.focusVig.style.background = `radial-gradient(ellipse 820px 600px at ${onFocus.x + 320}px ${onFocus.y + 300}px, rgba(14, 4, 34, 0) 42%, rgba(14, 4, 34, 0.62) 100%)`;
+      this.focusVig.style.backgroundImage = `radial-gradient(ellipse 820px 600px at ${onFocus.x + 320}px ${onFocus.y + 300}px, rgba(14, 4, 34, 0) 42%, rgba(14, 4, 34, 0.62) 100%)`;
       this.cam = this._shotState('wide');
       this._camAnims = null; // running Web Animations [rig, vignette]
       this._camDone = null;
@@ -1086,14 +1106,15 @@ window.ZD = window.ZD || {};
        A shot is reached with ONE Web Animation of the rig's transform
        (translate + scale, origin 0 0) plus one of the vignette's opacity.
        They run on the compositor, so the move stays smooth whatever the
-       main thread is doing, and Chrome rasterises the rig at the move's
-       largest zoom up front (no blurry stretch, no re-raster pop at the
-       end).  The rig keeps its own compositor layer for good (CSS
-       will-change), so starting / ending a move never changes the layer
-       setup.  A new shot takes over from wherever the camera is (sampled
-       from the running animation), so shots chain or cut short without a
-       jump.  Paused with the game (ZD.clock.track).  Resolves when the
-       shot is reached or superseded.
+       main thread is doing.  The rig and the vignette are compositor
+       layers for good (will-change in style.css): promoting them only for
+       a move rebuilt the layer tree and re-rasterised the whole view at
+       the start and end of every move, which a weak GPU shows as blurred
+       or missing tiles.  A new shot takes over from wherever the camera is
+       (sampled from the running animation), so shots chain or cut short
+       without a jump.
+       Paused with the game (ZD.clock.track).  Resolves when the shot is
+       reached or superseded.
        opts: duration (0 = cut), easing (CAM_EASE key or CSS easing),
              delay, from (start from that shot instead of the current view) */
     frame(name, { duration = 900, easing = 'easeInOutCubic', delay = 0, from = null } = {}) {
@@ -1169,13 +1190,6 @@ window.ZD = window.ZD || {};
       this.focusVig.style.opacity = String(Math.round(c.vig * 1000) / 1000);
     }
 
-    /* Rig (world) point -> view point, e.g. to zoom the view swing at the
-       window wherever the camera is framing it. */
-    toScreen(p) {
-      const c = this._camNow();
-      return { x: c.x + c.s * p.x, y: c.y + c.s * p.y };
-    }
-
     setScroll(px) {
       this.layers.forEach((l) => {
         if (l.tiled) scrollTiled(l, px);
@@ -1220,8 +1234,8 @@ window.ZD = window.ZD || {};
     popZombieHp(index) {
       const pip = this.hpEl.children[index];
       if (!pip) return;
-      anime.remove(pip);
-      anime({ targets: pip, scale: [1, 1.7, 1], duration: D(420), easing: 'easeOutBack' });
+      M.stop(pip);
+      M.pulse(pip, 1.7, { ms: D(420) });
       ZD.clock.timeout(() => pip.classList.add('gone'), D(140));
     }
 
@@ -1236,10 +1250,8 @@ window.ZD = window.ZD || {};
     }
 
     stopZombie() {
-      if (this._zAnim) {
-        this._zAnim._killed = true; // never restarted by a pause-menu resume
-        this._zAnim.pause();
-      }
+      // (killed, so a pause-menu resume never restarts it)
+      if (this._zAnim) this._zAnim.kill();
       this._zAnim = null;
       this.climbing = false;
       this.glass.setDanger(false);
@@ -1251,9 +1263,10 @@ window.ZD = window.ZD || {};
       const z = this.zombie;
       z.play({ sheet: 'zombie.front.run', fps: 9, loop: true });
       const base = Object.assign({}, this.zpose.mid);
-      const o = { x: 0 };
-      this._placeZombie(base, 0);
-      this._zAnim = anime({ targets: o, x: [-this.R * 0.42, this.R * 0.42], duration: 2600, direction: 'alternate', loop: true, easing: 'easeInOutSine', update: () => this._placeZombie(Object.assign({}, base, { x: o.x }), 0) });
+      const o = { x: -this.R * 0.42 };
+      const place = () => this._placeZombie(Object.assign({}, base, { x: o.x }), 0);
+      place(); // (starts where the sway starts: no jump on the first frame)
+      this._zAnim = M.to(o, { x: this.R * 0.42, ms: 2600, ease: PHYS.GLIDE, yoyo: true, repeat: -1, onUpdate: place });
     }
 
     /* Thinking time before the timer: the zombie finishes its walk-up (if
@@ -1264,8 +1277,9 @@ window.ZD = window.ZD || {};
       const stand = () => z.play({ sheet: 'zombie.front.idle', fps: 8, loop: true });
       const walk = this._zAnim;
       if (!walk) return stand();
-      walk.finished.then(() => {
-        if (!walk._killed && !this.climbing) stand();
+      // (a walk cut short by stopZombie never gets here)
+      walk.then(() => {
+        if (!this.climbing) stand();
       });
     }
 
@@ -1280,19 +1294,18 @@ window.ZD = window.ZD || {};
       const { start, far } = this.zpose;
       const o = { p: 0 };
       this._placeZombie(start, 0);
-      this._zAnim = anime({
-        targets: o,
+      const tw = (this._zAnim = M.to(o, {
         p: 1,
-        duration: D(ms),
-        easing: 'linear',
-        update: (a) => {
-          const hop = this._stride(a.currentTime);
+        ms: D(ms),
+        ease: PHYS.LINEAR,
+        onUpdate: () => {
+          const hop = this._stride(tw.time() * 1000);
           this._placeZombie({ y: start.y + (far.y - start.y) * o.p, s: start.s + (far.s - start.s) * o.p }, -hop * 4);
         },
-        complete: () => {
+        onComplete: () => {
           this._zAnim = null;
         },
-      });
+      }));
     }
 
     /* walking bounce 0..1 at `t` ms: one bump per footstep */
@@ -1302,7 +1315,7 @@ window.ZD = window.ZD || {};
 
     /* Timer: the zombie walks on from where it is (zombieWalkUp) to the
        glass in `ms`, at a steady pace.  Resolves 'timeout' when it gets
-       there; stopZombie() cancels.  Paused with the game (anime +
+       there; stopZombie() cancels.  Paused with the game (ZD.motion +
        ZD.clock).  onProgress(q, hop) runs every frame with the progress
        (0..1) and the stride's bounce (0..1) - it drives the HUD timer
        meter (ZD.ui.timerSet). */
@@ -1317,18 +1330,18 @@ window.ZD = window.ZD || {};
       let lastBeat = 0;
       this.climbing = true;
       return new Promise((resolve) => {
-        this._zAnim = anime({
-          targets: o,
+        const tw = (this._zAnim = M.to(o, {
           p: 1,
-          duration: ms,
-          easing: 'linear',
-          update: (a) => {
+          ms,
+          ease: PHYS.LINEAR,
+          onUpdate: () => {
+            const elapsed = tw.time() * 1000;
             const q = o.p;
-            const hop = q < 1 ? this._stride(a.currentTime) : 0;
+            const hop = q < 1 ? this._stride(elapsed) : 0;
             // closer = bigger steps on screen: the bounce grows with it
             this._placeZombie({ y: from.y + (near.y - from.y) * q, s: from.s + (near.s - from.s) * q }, -hop * (4 + 8 * q));
             if (onProgress) onProgress(q, hop);
-            const step = Math.floor(a.currentTime / ZOMBIE_STEP_MS);
+            const step = Math.floor(elapsed / ZOMBIE_STEP_MS);
             if (step !== lastStep) {
               lastStep = step;
               ZD.audio.play('step');
@@ -1340,12 +1353,12 @@ window.ZD = window.ZD || {};
               ZD.audio.play('heartbeat');
             }
           },
-          complete: () => {
+          onComplete: () => {
             this._zAnim = null;
             this.climbing = false;
             resolve('timeout');
           },
-        });
+        }));
       });
     }
 
@@ -1357,7 +1370,7 @@ window.ZD = window.ZD || {};
       const to = this.zpose.far;
       const o = { t: 0 };
       z.play({ sheet: 'zombie.front.hit', fps: 14 });
-      await anime({ targets: o, t: 1, duration: D(650), easing: 'easeInBack', update: () => this._placeZombie({ y: from.y + (to.y + this.R * 0.3 - from.y) * o.t, s: from.s + (to.s - from.s) * o.t }, 0) }).finished;
+      await M.to(o, { t: 1, ms: D(650), ease: PHYS.WINDUP, onUpdate: () => this._placeZombie({ y: from.y + (to.y + this.R * 0.3 - from.y) * o.t, s: from.s + (to.s - from.s) * o.t }, 0) });
     }
 
     /* Time out: the zombie bangs on the glass until it cracks. */
@@ -1588,7 +1601,7 @@ window.ZD = window.ZD || {};
       const P1 = { x: 2 * H.x - (P0.x + P2.x) / 2, y: 2 * H.y - (P0.y + P2.y) / 2 };
       const o = { t: 0 };
       let crossed = false;
-      await anime({ targets: o, t: 1, duration: D(duration), easing: 'linear', update: () => {
+      await M.to(o, { t: 1, ms: D(duration), ease: PHYS.LINEAR, onUpdate: () => {
         const t = o.t;
         const u = 1 - t;
         const cx = u * u * P0.x + 2 * u * t * P1.x + t * t * P2.x;
@@ -1602,7 +1615,7 @@ window.ZD = window.ZD || {};
           crossed = true;
           onCross && onCross();
         }
-      } }).finished;
+      } });
       sprite.setRotation(0);
       sprite.setPos(x1, y);
     }
@@ -1649,7 +1662,7 @@ window.ZD = window.ZD || {};
        the sprite's transform (zombieOffset -> setScroll). */
     zombieWalkIn(duration = 5200) {
       const z = this.zombie;
-      anime.remove(this);
+      M.stop(this);
       z.setFlip(false);
       z.setRotation(0);
       z.setOffsetY(0);
@@ -1660,26 +1673,26 @@ window.ZD = window.ZD || {};
       z.show(true);
       z.play({ sheet: this.walkSheet, fps: 8, loop: true });
       let lastStep = 0;
-      return anime({
-        targets: this,
+      const tw = M.to(this, {
         zombieOffset: 0,
-        duration: D(duration),
-        easing: 'linear',
-        update: (a) => {
+        ms: D(duration),
+        ease: PHYS.LINEAR,
+        onUpdate: () => {
           this.setScroll(this.scrollX);
-          const step = Math.floor(a.currentTime / ZOMBIE_STEP_MS);
+          const step = Math.floor((tw.time() * 1000) / ZOMBIE_STEP_MS);
           if (step !== lastStep && this.el.classList.contains('active')) {
             lastStep = step;
             ZD.audio.play('step');
           }
         },
-        complete: () => this.settleZombie(),
-      }).finished;
+        onComplete: () => this.settleZombie(),
+      });
+      return tw;
     }
 
     /* the walk-in is over (or cut short): the zombie stands at its spot */
     settleZombie() {
-      anime.remove(this);
+      M.stop(this);
       this.zombieOffset = 0;
       this.setScroll(this.scrollX);
       this.zombie.play({ sheet: 'zombie.side.idle', fps: 7, loop: true });
@@ -1706,7 +1719,7 @@ window.ZD = window.ZD || {};
 
     /* Run the hero along the road to stage x `x1` (feet on the road): the
        pace ramps up and down gently, legs locked to the distance covered. */
-    async heroRunTo(x1, { easing = 'easeInOutSine', ramp = 0.3 } = {}) {
+    async heroRunTo(x1, { ease = PHYS.GLIDE, ramp = 0.3 } = {}) {
       const h = this.hero;
       const x0 = h.x;
       const dist = Math.abs(x1 - x0);
@@ -1715,14 +1728,14 @@ window.ZD = window.ZD || {};
       const ms = Math.max(350, (dist / HERO_RUN_SPEED) * 1000 * (1 + ramp));
       const o = { x: x0 };
       let run = 0;
-      await anime({ targets: o, x: x1, duration: D(ms), easing, update: () => {
+      await M.to(o, { x: x1, ms: D(ms), ease, onUpdate: () => {
         run = Math.abs(o.x - x0);
         h.setPos(o.x, this.heroHome.y);
         if (this.heroRunAt(run)) {
           ZD.audio.play('step');
           fx.dust(this.fxLayer, o.x - 18, this.heroHome.y - 8);
         }
-      } }).finished;
+      } });
     }
 
     /* this skin's walk cycle; a skin without one walks on its run sheet */
@@ -1747,29 +1760,8 @@ window.ZD = window.ZD || {};
       this.hero.play({ sheet: 'hero.sideIdle', fps: 9, loop: true });
     }
 
-    /* Run to the next checkpoint on autopilot: world scrolls, the next wall
-       slides in.  (In play the learner drives this run: game.runAndJump.) */
-    async runToNext(distance = 1700, duration = 2600, { withZombie = true, gate = false } = {}) {
-      this.prepareRun(distance, { gate });
-      this.sendZombieTo(distance, withZombie);
-      // the hero may be on the far side of the wall (after jumping through):
-      // the camera catches up and the hero settles back at the home spot
-      const hx0 = this.hero.x;
-      const hx1 = this.heroHome.x;
-      const o = { v: 0 };
-      await anime({ targets: o, v: distance, duration: D(duration), easing: 'easeInOutSine', update: () => {
-        this.setScroll(o.v);
-        if (hx0 !== hx1) this.hero.setPos(hx0 + (hx1 - hx0) * (o.v / distance), this.heroHome.y);
-        // legs follow the road covered (camera move + the hero's own move)
-        if (this.heroRunAt(o.v + (this.hero.x - hx0))) {
-          ZD.audio.play('step');
-          fx.dust(this.fxLayer, this.hero.x - 18, this.heroHome.y - 8);
-        }
-      } }).finished;
-      this.finishRun(distance);
-    }
 
-    /* One leaf of the sliding steel gate (assets/images/safe-zone-gate.png,
+    /* One leaf of the sliding steel gate (circle-game-art/images/safe-zone-gate.png,
        split at its centre seam by the asset build), stretched to fill its
        half of the doorway. */
     _gateLeaf(key, side) {
@@ -1823,12 +1815,12 @@ window.ZD = window.ZD || {};
     }
 
     /* Slide the gate open (true) or shut (false). */
-    _slideGate(open, ms, easing) {
+    _slideGate(open, ms, ease) {
       const w = this.gateDoors.offsetWidth / 2 + 6;
       const [l, r] = this.gateDoors.children;
       return Promise.all([
-        anime({ targets: l, translateX: open ? [0, -w] : [-w, 0], duration: D(ms), easing }).finished,
-        anime({ targets: r, translateX: open ? [0, w] : [w, 0], duration: D(ms), easing }).finished,
+        M.fromTo(l, { x: open ? 0 : -w }, { x: open ? -w : 0, ms: D(ms), ease }),
+        M.fromTo(r, { x: open ? 0 : w }, { x: open ? w : 0, ms: D(ms), ease }),
       ]);
     }
 
@@ -1840,14 +1832,14 @@ window.ZD = window.ZD || {};
       const light = this.gate.querySelector('.safe-door-light');
       const hero = this.hero;
       const doors = this.gateDoors;
-      await this.heroRunTo(this.doorX, { easing: 'easeInOutSine', ramp: 0.25 });
+      await this.heroRunTo(this.doorX, { ease: PHYS.GLIDE, ramp: 0.25 });
       // face the gate (seen from behind) while it opens
       hero.setFlip(false);
       hero.play({ sheet: 'hero.backIdle', fps: 9, loop: true });
       ZD.audio.play('unlock');
       await wait(D(250));
       ZD.audio.play('whoosh');
-      await this._slideGate(true, 900, 'easeInOutSine');
+      await this._slideGate(true, 900, PHYS.GLIDE);
       await wait(D(120));
       // run in
       hero.play({ sheet: 'hero.backRun', fps: 13, loop: true });
@@ -1861,7 +1853,7 @@ window.ZD = window.ZD || {};
       const o = { u: 0 };
       let lit = false;
       let closing = null;
-      await anime({ targets: o, u: 1, duration: D(1700), easing: 'linear', update: () => {
+      await M.to(o, { u: 1, ms: D(1700), ease: PHYS.LINEAR, onUpdate: () => {
         const sc = 1 / (1 + k * o.u);
         const p = (1 - sc) / (1 - S1); // 0 at the threshold, 1 at the far door
         hero.setScale(this.heroScale * sc);
@@ -1870,12 +1862,12 @@ window.ZD = window.ZD || {};
         if (o.u > 0.06) doors.style.zIndex = 21;
         if (!lit && o.u > 0.3) {
           lit = true;
-          anime({ targets: light, opacity: [0, 1], duration: D(600), easing: 'easeOutCubic' });
+          M.enter(light, null, { ms: D(600) });
         }
         // halfway down the corridor the gate slides shut behind him
-        if (!closing && o.u > 0.5) closing = this._slideGate(false, 750, 'easeInQuad');
+        if (!closing && o.u > 0.5) closing = this._slideGate(false, 750, PHYS.ACCEL);
         hero.el.style.opacity = String(Math.min(1, Math.max(0, (1 - o.u) / 0.3)));
-      } }).finished;
+      } });
       await closing;
       hero.stop();
       // clang: the gate is shut and he is safe inside
@@ -1943,11 +1935,26 @@ window.ZD = window.ZD || {};
   /* ----------------------------------------------------------------------- */
   /* camera                                                                  */
   /* ----------------------------------------------------------------------- */
+  /* Both views are compositor layers for good (.scene in style.css) and the
+     hidden one is visibility:hidden, so it holds no GPU tiles.  A swing
+     never promotes or releases anything: changing will-change (or letting
+     an animation promote a view) rebuilds the layer tree and throws away
+     every rasterised tile of BOTH views right as they start to move; a
+     weak GPU (budget tablets) then shows the low-resolution placeholder
+     tiles and bare patches - the "pixelated, not loaded" flicker - at the
+     start and again at the end of the move.  The incoming view is painted
+     ahead of time (prewarm), unseen, so its images are decoded and its
+     tiles rastered before anything moves. */
+  const WARM_MS = 100; // a view that was not pre-warmed gets this long to paint before it moves
+
   class Camera {
     constructor(front, side) {
       this.front = front;
       this.side = side;
       this.current = null;
+      this.gen = 0;
+      this._swing = null;
+      this._warm = null; // name of the view painted ahead of the next swing
     }
 
     _scene(name) {
@@ -1965,81 +1972,113 @@ window.ZD = window.ZD || {};
       if (name === 'front') this.front.setScenery(this.side.travel);
     }
 
-    cut(name) {
-      // a swing still in flight (e.g. the intro was skipped mid-move) is
-      // dropped, and must not write its end state over this cut later
-      this.gen = (this.gen || 0) + 1;
+    /* Paint view `name` now, unseen, so a later to(name) starts with every
+       image decoded and every tile rastered.  Call it a second or more
+       before the swing (the wall title, the throw): on a budget tablet the
+       first paint of a whole view takes far longer than one frame, and a
+       view painted while it is already moving shows up as stale and
+       missing tiles.  Opacity 0.001 still rasterises (0 would be skipped);
+       the view sits under the one on screen.  Into the front view, `shot`
+       frames the rig where the swing will reveal it, so the tiles are
+       painted once, at the scale they will be shown at. */
+    prewarm(name, { shot = null } = {}) {
+      if (name === this.current || this._swing) return;
+      if (name === 'front' && this.front.shot !== (shot || 'wide')) this.front.frame(shot || 'wide', { duration: 0 });
+      if (this._warm === name) return;
+      this._syncFront(name);
+      const view = this._scene(name).el;
+      view.style.transform = '';
+      view.style.opacity = '0.001';
+      view.style.zIndex = '0';
+      if (this.current) this._scene(this.current).el.style.zIndex = '1';
+      view.classList.add('active');
+      this._warm = name;
+    }
+
+    _cancelSwing() {
       (this._swing || []).forEach((a) => a.cancel());
       this._swing = null;
-      this._syncFront(name);
-      this._tag(name);
-      if (name === 'front') this.front.frame('wide', { duration: 0 });
+    }
+
+    /* `name` on screen, the other view hidden (no tiles), both at rest */
+    _settle(name) {
       ['front', 'side'].forEach((n) => {
         const s = this._scene(n).el;
         s.classList.toggle('active', n === name);
-        s.style.opacity = n === name ? 1 : 0;
+        s.style.opacity = n === name ? '1' : '0';
         s.style.transform = '';
+        s.style.zIndex = '';
       });
+      this._warm = null;
       this.current = name;
     }
 
-    /* Cinematic shift between views: the old view zooms (at `zoomAt`),
-       swings and fades out while the new one swings and fades in.  Web
-       Animations on transform / opacity only, so the swing runs on the
-       compositor (smooth even while the main thread works, rasterised at
-       the largest zoom - no stretched pixels).
-       Into the front view with `shot`: the view only swings and fades, and
-       the camera rig does the zoom - from the 'enter' framing straight into
-       that shot in one long glide (`shotDuration`), so the swing and the
-       push-in on the wall read as ONE camera move, not two.  Resolves when
-       the swing is done (a glide keeps settling for a moment after). */
-    async to(name, { duration = 820, zoomAt, shot = null, shotDuration = 1550 } = {}) {
-      if (this.current === name) return;
+    cut(name) {
+      // a swing still in flight (e.g. the intro was skipped mid-move) is
+      // dropped, and must not write its end state over this cut later
+      this.gen++;
+      this._cancelSwing();
       this._syncFront(name);
       this._tag(name);
+      if (name === 'front') this.front.frame('wide', { duration: 0 });
+      this._settle(name);
+    }
+
+    /* Cinematic shift between views: the old view drifts away and fades out
+       over the new one, which drifts into place underneath.  The new view
+       is fully opaque from the first frame, so only ONE view is ever
+       blended (one offscreen surface, not two) and the two never show
+       half-transparent over the bare stage background (a dark flash in the
+       middle of the move).  This deliberately stays in 2D and never scales
+       either whole scene: a scale would re-rasterise every background
+       layer.  Into the front view with `shot`, the rig is placed at that
+       shot before the view is painted. */
+    async to(name, { duration = 820, shot = null } = {}) {
+      if (this.current === name) return;
+      const gen = ++this.gen;
+      this._cancelSwing();
       const from = this._scene(this.current).el;
       const to = this._scene(name).el;
-      const dir = name === 'side' ? 1 : -1;
-      const inDelay = duration * 0.35;
-      // leaving the front view, the swing zooms at the point as the rig
-      // frames it right now
-      if (zoomAt && this.current === 'front') zoomAt = this.front.toScreen(zoomAt);
-      let inScale = 0.92;
-      if (name === 'front') {
-        if (shot) {
-          this.front.frame(shot, { from: 'enter', duration: shotDuration, delay: inDelay, easing: 'glide' });
-          inScale = 1; // the rig zooms instead
-        } else {
-          this.front.frame('wide', { duration: 0 });
-        }
+      if (this._warm !== name) {
+        // not painted ahead of time: paint it now and give the raster
+        // threads a moment (forcing layout keeps the paint from being
+        // folded into the first moving frame)
+        this.prewarm(name, { shot });
+        to.getBoundingClientRect();
+        await ZD.util.nextFrame();
+        await ZD.util.nextFrame();
+        await wait(WARM_MS);
+        if (gen !== this.gen) return; // cut() took over meanwhile
+      } else if (name === 'front') {
+        this.front.frame(shot || 'wide', { duration: 0 }); // (no-op when pre-warmed at this shot)
       }
-      to.classList.add('active');
-      from.style.transformOrigin = zoomAt ? `${zoomAt.x}px ${zoomAt.y}px` : '50% 50%';
-      to.style.transformOrigin = '50% 50%';
+      this._tag(name);
+      from.style.zIndex = '1';
+      to.style.zIndex = '0';
+      to.style.opacity = '1';
       ZD.audio.play('swoosh');
+      const dir = name === 'side' ? 1 : -1;
+      const travel = 42 * dir;
+      // the old view is gone within the first half; the new one glides on
+      // to rest for the whole move, so nothing stops or starts abruptly
+      const outDuration = duration * 0.48;
       const out = from.animate(
-        [{ opacity: 1, transform: 'scale(1) rotateY(0deg)' }, { opacity: 0, transform: `scale(1.18) rotateY(${-18 * dir}deg)` }],
-        { duration: D(duration), easing: CAM_EASE.easeInQuad, fill: 'both' }
+        [{ opacity: 1, transform: 'translateX(0px)' }, { opacity: 0, transform: `translateX(${-travel}px)` }],
+        { duration: D(outDuration), easing: CAM_EASE.easeInQuad, fill: 'both' }
       );
       const inn = to.animate(
-        [{ opacity: 0, transform: `scale(${inScale}) rotateY(${16 * dir}deg)` }, { opacity: 1, transform: 'scale(1) rotateY(0deg)' }],
-        { duration: D(duration), delay: D(inDelay), easing: CAM_EASE.easeOutCubic, fill: 'both' }
+        [{ transform: `translateX(${travel}px)` }, { transform: 'translateX(0px)' }],
+        { duration: D(duration), easing: CAM_EASE.easeOutCubic, fill: 'both' }
       );
       [out, inn].forEach((a) => ZD.clock.track(a));
       this._swing = [out, inn];
-      const gen = this.gen;
       await Promise.all([animDone(out), animDone(inn)]);
       if (gen !== this.gen) return; // cut() took over meanwhile
       this._swing = null;
-      // final state into the inline style, then drop the animations
-      from.classList.remove('active');
-      from.style.opacity = '0';
-      from.style.transform = '';
-      to.style.opacity = '1';
-      to.style.transform = '';
+      // final state into the inline styles, then drop the animations
+      this._settle(name);
       out.cancel();
       inn.cancel();
-      this.current = name;
     }
   }
 

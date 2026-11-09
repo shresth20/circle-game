@@ -1,7 +1,7 @@
 # Zombie Defense — Parts of a Circle
 
 An HTML5 educational zombie-defense game (grades 8–10) built with vanilla
-HTML/CSS/JS and anime.js. Learners identify arcs, sectors, segments and their
+HTML/CSS/JS and GSAP. Learners identify arcs, sectors, segments and their
 minor/major forms by throwing matching circle pieces through a geometric wall
 before the zombies get through.
 
@@ -14,7 +14,7 @@ cd circle-game
 python3 -m http.server 8080        # then open http://localhost:8080
 ```
 
-Everything is local (fonts, anime.js, generated WebP art) so it works offline
+Everything is local (fonts, GSAP, generated WebP art) so it works offline
 once loaded. Best on a landscape tablet; it scales to any 16:9 → 20:9 screen.
 
 ## How a wall plays out
@@ -34,12 +34,20 @@ feedback.
 view sits in a camera rig that zooms and pans. Camera moves and view swings
 are Web Animations on transform / opacity only (compositor-driven, paused
 with the game via `ZD.clock.track`), and the views and the rig are always
-their own compositor layers (CSS `will-change`). This keeps them smooth and
-sharp, with no re-raster pop when a move ends. Coming from the side view,
-`camera.to('front', { shot: 'focus' })` is one continuous move: the view
-swings in and the camera glides straight on into the wall (`focus`: the wall
-fills the space left of the answer panel, a focus vignette darkens the
-edges). The opening's light-yellow neon rim lights then fade up
+their own compositor layers (CSS `will-change`, never toggled: promoting a
+view or the rig only for a move rebuilds the layer tree and re-rasterises
+every tile of the view at the start and end of the move, which a weak GPU
+shows as blurred or missing background tiles). The hidden view is
+`visibility: hidden`, so it holds no GPU memory. Before a view swings in it
+is painted unseen, seconds ahead (`camera.prewarm`: the wall title pre-paints
+the front view, the throw pre-paints the side view), so its images are
+decoded and its tiles rastered before anything moves. The swing itself keeps
+the incoming view fully opaque underneath while the old view fades out over
+it: one blended surface, never two half-transparent views over the bare
+stage. Coming from the side view, `camera.to('front', { shot: 'focus' })` is
+one continuous move: the view swings in and the camera glides straight on
+into the wall (`focus`: the wall fills the space left of the answer panel, a
+focus vignette darkens the edges). The opening's light-yellow neon rim lights then fade up
 (`GlassMech.lightUp`; the glows are separate small svgs, so they never
 repaint the zoomed view).
 When an answer is picked, the camera punches in on the window (`lock`) while
@@ -65,7 +73,7 @@ wall (`impact`), and the view swings to the side at the window.
   back where he stood (`hero.sideFall`, no knockback), and stays down while
   the zombie looms.  The camera pushes in on the two of them, the view dims
   to purple, red rays open and the GAME OVER sign (`gameOverSign`, from
-  `assets/images/gameover.png`) drops in with a **Replay** button under it;
+  `circle-game-art/images/gameover.png`) drops in with a **Replay** button under it;
   Replay zooms back out and plays the same wall again with a fresh zombie (walls already cleared stay
   cleared).  One mistake ends the run - there are no hearts.
 * **Time out** - on timed walls the zombie climbs up behind the glass (the
@@ -84,7 +92,7 @@ mission, wall, opening, what was picked (or `timeout`) and time taken.  The
 mission-complete panel lists the top mix-ups ("Practise these"), and
 `ZD.report()` in the browser console prints a per-piece table for teachers.
 
-The intro shows both outcomes with the same code (`ZD.game.sideThrowDemo`,
+The intro shows both outcomes with the same code (`throwFront`,
 `zombieBreakIn`, `heroJumpThrough`); after the boy falls, the scene dips to
 dark and resets for the right piece.  Leaps use
 `SideScene.leapThrough` plus a wall "cover" layer so whatever has passed the
@@ -99,6 +107,7 @@ js/
   i18n.js                  game-i18n: T('key'), data-i18n, I18n.say (voice by key)
   core/util.js             DOM helpers, pausable clock, prefs
   core/audio.js            procedural SFX (WebAudio) + read-aloud fallback
+                           + theme music (assets/audio/theme-song.webm, .mp3 fallback)
                            (speech); silent while page is inactive
   core/assets.js           manifest access + preloader
   core/sprites.js          sprite-sheet animator (one rAF ticker)
@@ -111,12 +120,15 @@ js/
                            changing between walls instead of resetting
   ui.js                    HUD, six-button answer panel, stamps, panels, bottom message bar
   controls.js              run-and-jump controller: RUN (hold) / JUMP (tap) buttons + keys
-  learn.js                 lesson card: correct piece fills the gap + reason
-                           (not shown at the moment: a mistake ends the run)
   intro.js                 title + 3-scene cinematic
   game.js                  state machine (wall loop, outcomes, finale)
   main.js                  boot + viewport fitting
-  vendor/anime.min.js      anime.js 3.2.2 (MIT)
+  motion.js                the motion system: every tween goes through it
+                           (GSAP; DUR / EASE / PHYS constants, enter / exit /
+                           pop / pulse / shake, pause freeze / thaw, reset)
+  libs/gsap.min.js         GSAP 3.13 core (bundled, no CDN)
+  libs/Flip.min.js         GSAP Flip 3.13 (bundled; not loaded - no layout
+                           animations yet)
 locales/locales.json       learner-facing strings — English only ("en")
 locales/locales.js         generated copy for file:// (command in js/i18n.js header)
 assets/
@@ -124,14 +136,17 @@ assets/
   images/                  RAW art (untouched source of truth)
   build/                   GENERATED game-ready WebP + manifest (do not edit)
   fonts/                   Lilita One, Nunito (OFL)
-tools/build-assets.py      raw art → assets/build (Pillow, numpy, scipy)
+tools/build-assets.py      raw art (../circle-game-art/images) → assets/build (Pillow, numpy, scipy)
 tools/sprite_stabilizer.py frame-by-frame registration of AI-drawn sprite sheets
 tools/sprite-qa.py         smoothness check of the built sheets (jitter, slide, seams)
 ```
 
 ## Asset pipeline
 
-`python3 tools/build-assets.py` rebuilds `assets/build/`:
+`python3 tools/build-assets.py` rebuilds `assets/build/`. The raw PNG art (~134 MB)
+is **not** part of the game: it lives in `../circle-game-art/images/` next to this
+repo (or wherever `CIRCLE_ART` points), so the shipped folder stays small.
+The script does:
 
 * cleans sprite alpha (haze/halo removal, white-keying of the zombie
   reference cards, component filtering of the noisy celebrate sheet),
@@ -145,6 +160,9 @@ tools/sprite-qa.py         smoothness check of the built sheets (jitter, slide, 
   record their base corners (`base.far/near`) so the side view stands them
   on the road; the side view's glass fills the hole's front opening
   (`WALL_RIMS`, an ellipse fitted to the rim - re-fit if the art changes),
+* drops the sheets the game never draws (`UNUSED`: the front-view zombie
+  die/dead, `hero.backJump`, walls `angle2/3`) - the preloader downloads every
+  manifest entry,
 * writes `manifest.json` and `manifest.js` (loaded as a classic script so the
   game works from `file://`).
 
@@ -202,7 +220,7 @@ character art.
 
 ### Replacing an asset
 
-1. Drop the new file over the old one in `assets/images/…` (same name) or
+1. Drop the new file over the old one in `../circle-game-art/images/…` (same name) or
    point the relevant entry in `tools/build-assets.py` (`HERO_GRIDS`,
    `ZOMBIE_FRONT`, `ZOMBIE_SIDE`, `build_layers`, `build_walls`) at the new file.
 2. Re-run the pipeline. Frame counts, cell sizes and wall openings are
@@ -218,7 +236,7 @@ Zombie front strips are extracted from the labelled reference cards.
 Every in-play line - wall titles, the question, rule reviews, "checkpoint
 cleared", the intro alarm - appears in one bar at the bottom of the screen
 (`ZD.ui.showBanner(title, text, kind)` / `hideBanner()` / `caption(key)`).
-Its art is `assets/images/banner.png`, cleaned by `build_banner()` in
+Its art is `circle-game-art/images/banner.png`, cleaned by `build_banner()` in
 `tools/build-assets.py` (crop, noisy portrait socket replaced by a dark disc)
 and stretched at runtime as a 9-slice, so the socket and stripes never
 distort.  The hero's profile picture (`boy/profile.png`, cropped by
@@ -283,8 +301,9 @@ reasons (`reason*`, lesson card).  To ship recorded voice-overs, record those
 
 ## Audio
 
-All sound effects are synthesised in `js/core/audio.js` (`SFX` recipes), so
-no audio files are required. Toggle sound (M key / HUD button), read-aloud,
+All sound effects are synthesised in `js/core/audio.js` (`SFX` recipes); the
+only audio file is the looping theme (`assets/audio/theme-song.webm`, Opus
+64 kbps; browsers without WebM Opus get the `.mp3`). Toggle sound (M key / HUD button), read-aloud,
 the zombie timer and reduced motion from the pause menu (Esc / P). When the tab is hidden or the window
 loses focus, the AudioContext is suspended (`ZD.audio.setActive`, wired in
 `js/main.js`) — no ambient loop or effects play until the learner returns.

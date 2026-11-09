@@ -18,7 +18,21 @@ window.ZD = window.ZD || {};
   function loadOnce(src) {
     return new Promise((resolve, reject) => {
       const img = new Image();
-      img.onload = () => resolve(img);
+      img.decoding = 'async';
+      img.onload = async () => {
+        /* `load` means the bytes are available, but a large WebP can still
+           be waiting for its first decode.  If the scene starts meanwhile,
+           that decode competes with the camera transition and Chrome/Safari
+           may briefly composite an empty or low-resolution tile. */
+        try {
+          if (img.decode) await img.decode();
+        } catch (e) {
+          /* Some Safari versions reject decode() after a successful load.
+             The image is usable in that case, so only the load error below
+             is fatal. */
+        }
+        resolve(img);
+      };
       img.onerror = () => reject(new Error('Failed to load ' + src));
       img.src = url(src);
     });
