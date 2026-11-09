@@ -332,6 +332,13 @@ window.ZD = window.ZD || {};
     get ready() {
       return state.ready;
     },
+    /* Build the one AudioContext while the welcome screen is still up.  It
+       remains suspended until unlock() is called by a gesture, but moving
+       construction off the Play handler removes the measured ~100 ms task
+       from the first animation frame. */
+    prime() {
+      if (!state.muted) ensure();
+    },
     /* Call from a user gesture (tap) to unlock audio on mobile browsers. */
     unlock() {
       if (!ensure()) return;

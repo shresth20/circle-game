@@ -154,9 +154,16 @@ window.ZD = window.ZD || {};
       });
       loops.forEach((a) => a.kill());
       M.stop([logo, btn, art]);
+      // The welcome picture is opaque, so the browser does not paint the
+      // scene under it at all (it is hidden) - and had to paint all of it in
+      // the frame the picture went away (missing tiles, measured).  A hair
+      // of transparency (invisible) while the logo and button leave lets
+      // the scene paint first; the picture then goes as before.
+      ov.style.opacity = '0.999';
       M.to(btn, { scale: 0.9, duration: DUR.FAST, ease: EASE.IN });
       await M.exit([logo, btn], null, { duration: DUR.NORMAL, delay: DUR.INSTANT });
       ov.classList.remove('visible', 'welcome');
+      ov.style.opacity = '';
       ov.innerHTML = '';
     },
 
@@ -357,6 +364,10 @@ window.ZD = window.ZD || {};
         C.hide();
 
         /* ---- 8. the wrong answer ------------------------------------ */
+        // the front view is painted now, unseen, while the bar slides away
+        // and the scene dips out: it fades back in with every tile ready
+        // (it used to get a single frame between the cut and the fade-in)
+        camera.prewarm('front', { shot: 'focus' });
         await step(ui.hideBanner());
         await step(M.exit(world, null, { ms: D(420) }));
         // out of sight: the wall again, with the other zombie and a new gap

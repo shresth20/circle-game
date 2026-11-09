@@ -65,15 +65,17 @@ window.ZD = window.ZD || {};
     return defs.map(([key, x, y, scale, flip], i) => Object.assign(propLayer(key, { x, y, scale, z: 2, factor, cls: 'far cloud', flip }), { cloud: true, drift: 0, flip: !!flip, speed: 0.55 + scale * 0.8 + ((i * 37) % 5) * 0.06 }));
   }
 
-  /* One sun, drawn here: the skyline art's own sun repeated with every tile. */
+  /* One sun, drawn here: the skyline art's own sun repeated with every tile.
+     The disc (gradient, glow, colour filter) is the layer's .art child: the
+     layer itself moves (parallax) and carries no filter. */
   function sunLayer({ x, y, d, factor }) {
-    const node = el('div', { class: 'layer sun far', style: { left: x - d / 2 + 'px', top: y - d / 2 + 'px', width: d + 'px', height: d + 'px', zIndex: 3, willChange: scrollLayer(factor) } });
+    const node = el('div', { class: 'layer sun far', style: { left: x - d / 2 + 'px', top: y - d / 2 + 'px', width: d + 'px', height: d + 'px', zIndex: 3, willChange: scrollLayer(factor) } }, [el('div', { class: 'art' })]);
     return { node, factor, tiled: false, x: x - d / 2, w: d };
   }
 
-  /* clouds drift slowly and wrap around the world */
+  /* clouds drift slowly and wrap around the world (the flip is on the art) */
   function placeCloud(l, px) {
-    l.node.style.transform = `translateX(${wrapX(l.x - px * l.factor - l.drift, l.w) - l.x}px)${l.flip ? ' scaleX(-1)' : ''}`;
+    l.node.style.transform = `translateX(${wrapX(l.x - px * l.factor - l.drift, l.w) - l.x}px)`;
   }
 
   /* Every animation always plays in full (no reduced-motion mode).  D() is
@@ -81,24 +83,33 @@ window.ZD = window.ZD || {};
   const settings = {};
   const D = (ms) => ms;
 
-  /* CSS easings for the compositor camera moves (Web Animations: they run
-     off the main thread, so a busy frame never stutters the camera).
+  /* Camera / glow easing curves (cubic-bezier control points), as CSS for
+     Web Animations (CAM_EASE: view swings, rim lights, flashes) and as GSAP
+     eases (CAM_FN: the front view's camera rig, see FrontScene.frame).
      glide = a long camera move: soft start, long gentle landing. */
-  const CAM_EASE = {
-    linear: 'linear',
-    easeInQuad: 'cubic-bezier(0.11, 0, 0.5, 0)',
-    easeOutQuad: 'cubic-bezier(0.5, 1, 0.89, 1)',
-    easeOutCubic: 'cubic-bezier(0.33, 1, 0.68, 1)',
-    easeInOutCubic: 'cubic-bezier(0.65, 0, 0.35, 1)',
-    easeInOutSine: 'cubic-bezier(0.37, 0, 0.63, 1)',
-    glide: 'cubic-bezier(0.42, 0, 0.18, 1)',
+  const CURVES = {
+    linear: [0, 0, 1, 1],
+    easeInQuad: [0.11, 0, 0.5, 0],
+    easeOutQuad: [0.5, 1, 0.89, 1],
+    easeOutCubic: [0.33, 1, 0.68, 1],
+    easeInOutCubic: [0.65, 0, 0.35, 1],
+    easeInOutSine: [0.37, 0, 0.63, 1],
+    glide: [0.42, 0, 0.18, 1],
   };
+  const CAM_EASE = {};
+  const CAM_FN = {};
+  Object.entries(CURVES).forEach(([k, c]) => {
+    CAM_EASE[k] = k === 'linear' ? 'linear' : `cubic-bezier(${c.join(', ')})`;
+    CAM_FN[k] = M.bezier(...c);
+  });
   const camXf = (c) => `translate(${c.x}px, ${c.y}px) scale(${c.s})`;
   /* resolves when a Web Animation finishes or is cancelled (never rejects) */
   const animDone = (a) => new Promise((res) => {
     a.addEventListener('finish', res, { once: true });
     a.addEventListener('cancel', res, { once: true });
   });
+  /* lifecycle marks for the ?perf overlay / traces (no-op without it) */
+  const mark = (ev, detail) => ZD.perf && ZD.perf.mark(ev, detail);
   // forget settings from removed options (reduced motion; pause-menu
   // read-aloud and zombie-timer switches - both are always on now)
   try {
@@ -112,7 +123,13 @@ window.ZD = window.ZD || {};
      Chrome merges the moving strips (road, dirt, mountains...) into one
      huge "overlap" layer and repaints it every frame; it can't keep up and
      draws that layer empty on some frames - the scene flickers and the
-     road / ground blink pink. */
+     road / ground blink pink.
+     Such a layer never carries a CSS filter itself: its pixels sit in
+     .art children (the tiles, or one inner element) and the colour filters
+     (style.css) go on those.  A filter on a compositor layer is redone by
+     the GPU every frame in an offscreen pass ("render surface") - 11-13 of
+     them per frame before, measured; on the art it is applied once, when
+     the tiles are painted, and gives the same pixels. */
   const scrollLayer = (factor) => (factor ? 'transform' : '');
 
   /* ----------------------------------------------------------------------- */
@@ -140,7 +157,7 @@ window.ZD = window.ZD || {};
     for (let i = 0; i < count; i++) {
       node.appendChild(
         el('div', {
-          class: 'tile',
+          class: 'tile art',
           style: {
             left: i * tileW + 'px',
             width: tileW + 1 + 'px', // 1px overlap hides sub-pixel seams
@@ -163,25 +180,31 @@ window.ZD = window.ZD || {};
     l.node.style.transform = `translateX(${-off}px)`;
   }
 
+  /* A prop (tree, rock, cloud...).  A still prop is its own art.  A moving
+     one (factor != 0: parallax, drifting clouds) is a compositor layer whose
+     art - background, flip, colour filter - is an inner .art element, so
+     the layer's transform is free for the scroll and it needs no filter
+     pass (see scrollLayer). */
   function propLayer(key, { x, y, scale = 1, z, factor = 0, cls = '', flip = false, opacity = 1 }) {
     const img = A.image(key);
     const w = Math.round(img.w * scale);
     const h = Math.round(img.h * scale);
-    const node = el('div', {
-      class: 'layer prop ' + cls,
-      style: {
-        left: x + 'px',
-        top: y - h + 'px', // y = baseline (bottom edge)
-        width: w + 'px',
-        height: h + 'px',
-        zIndex: z,
-        opacity,
-        backgroundImage: `url("${A.imageUrl(key)}")`,
-        backgroundSize: '100% 100%',
-        transform: flip ? 'scaleX(-1)' : '',
-        willChange: scrollLayer(factor),
-      },
-    });
+    const art = {
+      backgroundImage: `url("${A.imageUrl(key)}")`,
+      backgroundSize: '100% 100%',
+      transform: flip ? 'scaleX(-1)' : '',
+    };
+    const box = {
+      left: x + 'px',
+      top: y - h + 'px', // y = baseline (bottom edge)
+      width: w + 'px',
+      height: h + 'px',
+      zIndex: z,
+      opacity,
+    };
+    const node = factor
+      ? el('div', { class: 'layer prop ' + cls, style: Object.assign(box, { willChange: scrollLayer(factor) }) }, [el('div', { class: 'art', style: art })])
+      : el('div', { class: 'layer prop art ' + cls, style: Object.assign(box, art) });
     return { node, factor, tiled: false, x, w };
   }
 
@@ -828,10 +851,19 @@ window.ZD = window.ZD || {};
   /* ----------------------------------------------------------------------- */
   /* effects                                                                 */
   /* ----------------------------------------------------------------------- */
+  /* glass shard outlines (0-100 box, stretched to the shard's size) */
+  const SHARD_SHAPES = ['0,0 100,20 60,100', '10,0 100,0 70,100 0,60', '50,0 100,100 0,100'];
+
   const fx = {
+    /* Each shard is a small svg triangle: it flies on its own GPU layer
+       while it tweens, and a css clip-path there would be a mask pass per
+       shard per frame (16 at a breach, measured) - the svg is just pixels. */
     shards(container, x, y, n = 14, colors = ['#bfe9ff', '#8fd3ff', '#ffffff', '#ff8aa0']) {
       for (let i = 0; i < n; i++) {
-        const s = el('div', { class: 'shard', style: { left: x + 'px', top: y + 'px', background: pick(colors), width: randInt(10, 26) + 'px', height: randInt(10, 26) + 'px', clipPath: pick(['polygon(0 0,100% 20%,60% 100%)', 'polygon(10% 0,100% 0,70% 100%,0 60%)', 'polygon(50% 0,100% 100%,0 100%)']) } });
+        const w = randInt(10, 26);
+        const h = randInt(10, 26);
+        const shape = svg('svg', { width: w, height: h, viewBox: '0 0 100 100', preserveAspectRatio: 'none' }, [svg('polygon', { points: pick(SHARD_SHAPES), fill: pick(colors) })]);
+        const s = el('div', { class: 'shard', style: { left: x + 'px', top: y + 'px', width: w + 'px', height: h + 'px' } }, [shape]);
         container.appendChild(s);
         const ang = rand(0, Math.PI * 2);
         const dist = rand(90, 320);
@@ -1097,56 +1129,60 @@ window.ZD = window.ZD || {};
       // (#world-sized box: 2560 x 1700 from (-320, -300), as #vignette)
       this.focusVig.style.backgroundImage = `radial-gradient(ellipse 820px 600px at ${onFocus.x + 320}px ${onFocus.y + 300}px, rgba(14, 4, 34, 0) 42%, rgba(14, 4, 34, 0.62) 100%)`;
       this.cam = this._shotState('wide');
-      this._camAnims = null; // running Web Animations [rig, vignette]
+      this._camTween = null; // running camera move (GSAP)
       this._camDone = null;
       this.frame('wide', { duration: 0 });
     }
 
     /* ---- camera rig ----
-       A shot is reached with ONE Web Animation of the rig's transform
-       (translate + scale, origin 0 0) plus one of the vignette's opacity.
-       They run on the compositor, so the move stays smooth whatever the
-       main thread is doing.  The rig and the vignette are compositor
-       layers for good (will-change in style.css): promoting them only for
-       a move rebuilt the layer tree and re-rasterised the whole view at
-       the start and end of every move, which a weak GPU shows as blurred
-       or missing tiles.  A new shot takes over from wherever the camera is
-       (sampled from the running animation), so shots chain or cut short
-       without a jump.
-       Paused with the game (ZD.clock.track).  Resolves when the shot is
-       reached or superseded.
-       opts: duration (0 = cut), easing (CAM_EASE key or CSS easing),
-             delay, from (start from that shot instead of the current view) */
+       A shot is reached with ONE tween (ZD.motion / GSAP, on the frame
+       clock with the sprites and the projectile) that writes the rig's
+       transform (translate + scale, origin 0 0) and the vignette's opacity.
+       Why not a compositor Web Animation (as before 2026-11-09): every
+       time a compositor animation starts or stops on the rig, Chrome
+       re-picks the raster scale of every layer inside it and re-paints
+       their tiles - at the start AND the end of every zoom.  Measured in
+       Edge (Apple M5): 4 frames with missing tiles at each punch-in to
+       `lock`, and the half-painted wall seen when the view swings away
+       right after `impact`; on a budget tablet those gaps last far longer.
+       Moved from the main thread, the layers keep the scale they were
+       first painted at (the shot the view was pre-warmed at, `focus` for
+       every wall), are never re-painted for a zoom, and the camera stays
+       in step with the projectile it follows.  The rig and the vignette
+       are compositor layers for good (will-change in style.css).
+       A new shot takes over from wherever the camera is, so shots chain or
+       cut short without a jump.  Paused with the game (ZD.motion.freeze).
+       Resolves when the shot is reached or superseded.
+       opts: duration (0 = cut), easing (CAM_EASE key), delay,
+             from (start from that shot instead of the current view) */
     frame(name, { duration = 900, easing = 'easeInOutCubic', delay = 0, from = null } = {}) {
       const to = this._shotState(name);
-      const start = from ? this._shotState(from) : this._camNow();
+      const start = from ? this._shotState(from) : Object.assign({}, this.cam);
       this._stopCam();
       this.shot = name;
-      this._setCam(duration ? start : to);
-      if (!duration) return Promise.resolve();
-      const opts = { duration: D(duration), delay: D(delay), easing: CAM_EASE[easing] || easing, fill: 'both' };
-      const a = this.rig.animate([{ transform: camXf(start) }, { transform: camXf(to) }], opts);
-      const v = this.focusVig.animate([{ opacity: start.vig }, { opacity: to.vig }], opts);
-      [a, v].forEach((x) => ZD.clock.track(x));
-      this._camAnims = [a, v];
-      this._camFrom = start;
-      this._camTo = to;
+      mark('front.frame', name);
+      if (!duration) {
+        this._setCam(to);
+        return Promise.resolve();
+      }
+      this._setCam(start);
+      const o = { k: 0 };
+      const lerp = (a, b) => a + (b - a) * o.k;
       return new Promise((resolve) => {
-        const done = () => {
-          if (this._camDone !== done) return;
-          this._camDone = null;
-          resolve();
-        };
-        this._camDone = done;
-        a.onfinish = () => {
-          if (!this._camAnims || this._camAnims[0] !== a) return;
-          // hand the end state to the inline style, then drop the animations
-          // (same values: nothing moves, nothing is re-rasterised)
-          this._setCam(to);
-          this._camAnims.forEach((x) => x.cancel());
-          this._camAnims = null;
-          done();
-        };
+        this._camDone = resolve;
+        this._camTween = M.to(o, {
+          k: 1,
+          ms: D(duration),
+          delayMs: D(delay),
+          ease: CAM_FN[easing] || CAM_FN.easeInOutCubic,
+          onUpdate: () => this._setCam({ s: lerp(start.s, to.s), x: lerp(start.x, to.x), y: lerp(start.y, to.y), vig: lerp(start.vig, to.vig) }),
+          onComplete: () => {
+            this._camTween = null;
+            const done = this._camDone;
+            this._camDone = null;
+            if (done) done();
+          },
+        });
       });
     }
 
@@ -1163,25 +1199,14 @@ window.ZD = window.ZD || {};
       return { s: sh.s, x: sh.on.x - sh.s * this.hole.x, y: sh.on.y - sh.s * this.hole.y, vig: sh.vig };
     }
 
-    /* where the camera is right now (mid-move: read from the animation's
-       eased progress; the keyframes are linear in s / x / y / vig) */
-    _camNow() {
-      if (!this._camAnims) return Object.assign({}, this.cam);
-      const p = this._camAnims[0].effect.getComputedTiming().progress;
-      const k = p == null ? 1 : p;
-      const f = this._camFrom;
-      const t = this._camTo;
-      return { s: f.s + (t.s - f.s) * k, x: f.x + (t.x - f.x) * k, y: f.y + (t.y - f.y) * k, vig: f.vig + (t.vig - f.vig) * k };
-    }
-
+    /* stop a running move where it is (this.cam is always where the camera
+       is); the superseded shot resolves */
     _stopCam() {
-      if (this._camAnims) {
-        const now = this._camNow();
-        this._camAnims.forEach((x) => x.cancel());
-        this._camAnims = null;
-        this._setCam(now);
-      }
-      if (this._camDone) this._camDone(); // the superseded shot resolves
+      if (this._camTween) this._camTween.kill();
+      this._camTween = null;
+      const done = this._camDone;
+      this._camDone = null;
+      if (done) done();
     }
 
     _setCam(c) {
@@ -1942,10 +1967,19 @@ window.ZD = window.ZD || {};
      every rasterised tile of BOTH views right as they start to move; a
      weak GPU (budget tablets) then shows the low-resolution placeholder
      tiles and bare patches - the "pixelated, not loaded" flicker - at the
-     start and again at the end of the move.  The incoming view is painted
-     ahead of time (prewarm), unseen, so its images are decoded and its
-     tiles rastered before anything moves. */
-  const WARM_MS = 100; // a view that was not pre-warmed gets this long to paint before it moves
+     start and again at the end of the move.  The incoming view is made
+     ready ahead of time (prewarm), unseen: first every image it draws is
+     decoded (ZD.assets.decode), then it is painted, so its tiles are
+     rastered before anything moves.  to() waits for both. */
+  /* The swing between views: a cut on motion.  Both views drift the same
+     way at the same speed (one continuous camera move); the picture
+     changes at `cut` (fraction of the move).  Only one view is on screen
+     at a time - no double exposure -
+     and both stay within `drift` px of where they rest, so every tile
+     the prewarm painted is still the one on screen.  (A long slide-in was
+     measured too: it starts the new view off screen, the GPU drops its
+     painted tiles, and they come back missing as it slides in.) */
+  const SWING = { ms: 700, drift: 48, cut: 0.4 };
 
   class Camera {
     constructor(front, side) {
@@ -1954,7 +1988,9 @@ window.ZD = window.ZD || {};
       this.current = null;
       this.gen = 0;
       this._swing = null;
-      this._warm = null; // name of the view painted ahead of the next swing
+      this._warm = null; // name of the view being made ready for the next swing
+      this._painted = null; // ...once it is painted (unseen, under the current view)
+      this._warmReady = null; // resolves when its images are decoded and it is painted
     }
 
     _scene(name) {
@@ -1972,27 +2008,89 @@ window.ZD = window.ZD || {};
       if (name === 'front') this.front.setScenery(this.side.travel);
     }
 
-    /* Paint view `name` now, unseen, so a later to(name) starts with every
-       image decoded and every tile rastered.  Call it a second or more
-       before the swing (the wall title, the throw): on a budget tablet the
-       first paint of a whole view takes far longer than one frame, and a
-       view painted while it is already moving shows up as stale and
-       missing tiles.  Opacity 0.001 still rasterises (0 would be skipped);
-       the view sits under the one on screen.  Into the front view, `shot`
-       frames the rig where the swing will reveal it, so the tiles are
-       painted once, at the scale they will be shown at. */
-    prewarm(name, { shot = null } = {}) {
-      if (name === this.current || this._swing) return;
-      if (name === 'front' && this.front.shot !== (shot || 'wide')) this.front.frame(shot || 'wide', { duration: 0 });
-      if (this._warm === name) return;
-      this._syncFront(name);
+    /* Build paths ('bg/sky.webp') of every image view `name` draws right
+       now: its layers' backgrounds, the wall cover's svg image and the
+       characters' current sheets. */
+    _images(name) {
+      const base = A.url('');
+      const out = new Set();
+      const add = (u) => {
+        if (u && u.startsWith(base)) out.add(u.slice(base.length));
+      };
+      const view = this._scene(name).el;
+      view.querySelectorAll('[style*="background-image"]').forEach((n) => {
+        const m = /url\("?([^")]+)"?\)/.exec(n.style.backgroundImage);
+        if (m) add(m[1]);
+      });
+      view.querySelectorAll('image').forEach((n) => add(n.getAttribute('href')));
+      return [...out];
+    }
+
+    /* Show view `name` at opacity 0.001, under the current view, so the
+       browser paints it (0 would be skipped). Once per prewarm. */
+    _reveal(name) {
+      if (this._painted === name) return false;
+      this._painted = name;
       const view = this._scene(name).el;
       view.style.transform = '';
       view.style.opacity = '0.001';
       view.style.zIndex = '0';
       if (this.current) this._scene(this.current).el.style.zIndex = '1';
       view.classList.add('active');
+      return true;
+    }
+
+    /* There is no web API that promises "all GPU tiles are uploaded".  The
+       deterministic boundary available to page code is: decoded images,
+       forced layout, then two animation frames (one complete browser paint
+       between the callbacks).  Prewarm calls this seconds before a normal
+       swing; when to() must prepare a view itself, it awaits this boundary
+       instead of racing it against a timeout. */
+    async _paint(name) {
+      if (this._warm !== name) return;
+      const view = this._scene(name).el;
+      this._reveal(name);
+      view.getBoundingClientRect();
+      await ZD.util.nextFrame();
+      await ZD.util.nextFrame();
+      if (this._warm === name) mark('camera.painted', name);
+    }
+
+    /* Make view `name` ready, unseen, so a later to(name) starts with every
+       image decoded and every tile rastered: 1. decode the images it draws
+       (through the shared bounded queue, off the raster threads' path - an
+       image the browser still holds decoded resolves at once), 2. paint it under the current
+       view.  Call it a second or more before the swing (the wall title,
+       the throw): on a budget tablet the first paint of a whole view takes
+       far longer than one frame, and a view painted while it is already
+       moving shows up as stale and missing tiles.  Into the front view,
+       `shot` frames the rig where the swing will reveal it, so the tiles
+       are painted once, at the scale they will be shown at (the camera
+       rig never re-paints them for a zoom - see FrontScene.frame). */
+    prewarm(name, { shot = null } = {}) {
+      if (name === this.current || this._swing) return Promise.resolve();
+      if (name === 'front' && this.front.shot !== (shot || 'wide')) this.front.frame(shot || 'wide', { duration: 0 });
+      if (this._warm === name) return this._warmReady;
+      this._syncFront(name);
       this._warm = name;
+      this._painted = null;
+      mark('camera.prewarm', name);
+      this._warmReady = ZD.assets.decode(this._images(name)).then(() => this._paint(name));
+      return this._warmReady;
+    }
+
+    /* Initial view: decode before the welcome screen can leave.  Unlike a
+       prewarm this does not activate another scene or allocate two scene
+       surfaces; it only makes the already-current scene paint-ready. */
+    async prepareCurrent() {
+      if (!this.current) return;
+      const view = this._scene(this.current).el;
+      mark('camera.prepare', this.current);
+      await ZD.assets.decode(this._images(this.current));
+      view.getBoundingClientRect();
+      await ZD.util.nextFrame();
+      await ZD.util.nextFrame();
+      mark('camera.prepared', this.current);
     }
 
     _cancelSwing() {
@@ -2010,7 +2108,10 @@ window.ZD = window.ZD || {};
         s.style.zIndex = '';
       });
       this._warm = null;
+      this._painted = null;
+      this._warmReady = null;
       this.current = name;
+      mark('camera.settled', name);
     }
 
     cut(name) {
@@ -2021,55 +2122,58 @@ window.ZD = window.ZD || {};
       this._syncFront(name);
       this._tag(name);
       if (name === 'front') this.front.frame('wide', { duration: 0 });
+      mark('camera.cut', name);
       this._settle(name);
     }
 
-    /* Cinematic shift between views: the old view drifts away and fades out
-       over the new one, which drifts into place underneath.  The new view
-       is fully opaque from the first frame, so only ONE view is ever
-       blended (one offscreen surface, not two) and the two never show
-       half-transparent over the bare stage background (a dark flash in the
-       middle of the move).  This deliberately stays in 2D and never scales
-       either whole scene: a scale would re-rasterise every background
-       layer.  Into the front view with `shot`, the rig is placed at that
-       shot before the view is painted. */
-    async to(name, { duration = 820, shot = null } = {}) {
+    /* The swing between views (see SWING): a cut on motion, as one camera
+       move.  Waits until the new view is decoded and painted (prewarm;
+       painted here across a real paint boundary if nobody pre-warmed it). Only
+       transform / opacity of the two views, on the compositor; it never
+       scales either view (a scale would re-paint every background layer).
+       Into the front view with `shot`, the rig is placed at that shot
+       before the view is painted. */
+    async to(name, { duration = SWING.ms, shot = null } = {}) {
       if (this.current === name) return;
       const gen = ++this.gen;
       this._cancelSwing();
       const from = this._scene(this.current).el;
       const to = this._scene(name).el;
-      if (this._warm !== name) {
-        // not painted ahead of time: paint it now and give the raster
-        // threads a moment (forcing layout keeps the paint from being
-        // folded into the first moving frame)
-        this.prewarm(name, { shot });
+      if (this._warm !== name) this.prewarm(name, { shot });
+      else if (name === 'front') this.front.frame(shot || 'wide', { duration: 0 }); // (no-op when pre-warmed at this shot)
+      // Never begin a swing with a decode or first paint still in flight.
+      // Normal game flow starts this promise seconds earlier; the await is
+      // therefore free unless a caller forgot to prewarm.
+      await this._warmReady;
+      if (gen !== this.gen) return; // cut() took over meanwhile
+      if (this._reveal(name)) {
+        // Defensive path for a superseded prewarm. No fixed delay: wait for
+        // an actual browser paint boundary.
         to.getBoundingClientRect();
         await ZD.util.nextFrame();
         await ZD.util.nextFrame();
-        await wait(WARM_MS);
-        if (gen !== this.gen) return; // cut() took over meanwhile
-      } else if (name === 'front') {
-        this.front.frame(shot || 'wide', { duration: 0 }); // (no-op when pre-warmed at this shot)
+        if (gen !== this.gen) return;
       }
       this._tag(name);
+      mark('camera.swing', name);
       from.style.zIndex = '1';
       to.style.zIndex = '0';
       to.style.opacity = '1';
       ZD.audio.play('swoosh');
-      const dir = name === 'side' ? 1 : -1;
-      const travel = 42 * dir;
-      // the old view is gone within the first half; the new one glides on
-      // to rest for the whole move, so nothing stops or starts abruptly
-      const outDuration = duration * 0.48;
+      // both views travel the same way (into the side view the picture
+      // moves left, into the front view right), 2 x drift in all
+      const shift = 2 * SWING.drift * (name === 'side' ? 1 : -1);
+      const opts = { duration: D(duration), easing: CAM_EASE.easeInOutSine, fill: 'both' };
       const out = from.animate(
-        [{ opacity: 1, transform: 'translateX(0px)' }, { opacity: 0, transform: `translateX(${-travel}px)` }],
-        { duration: D(outDuration), easing: CAM_EASE.easeInQuad, fill: 'both' }
+        [
+          { transform: 'translateX(0px)', opacity: 1 },
+          { opacity: 1, offset: SWING.cut },
+          { opacity: 0, offset: SWING.cut },
+          { transform: `translateX(${-shift}px)`, opacity: 0 },
+        ],
+        opts
       );
-      const inn = to.animate(
-        [{ transform: `translateX(${travel}px)` }, { transform: 'translateX(0px)' }],
-        { duration: D(duration), easing: CAM_EASE.easeOutCubic, fill: 'both' }
-      );
+      const inn = to.animate([{ transform: `translateX(${shift}px)` }, { transform: 'translateX(0px)' }], opts);
       [out, inn].forEach((a) => ZD.clock.track(a));
       this._swing = [out, inn];
       await Promise.all([animDone(out), animDone(inn)]);
@@ -2094,6 +2198,26 @@ window.ZD = window.ZD || {};
     /* Zombie variants (sprite skins): the road worker ("zombie.*" sheets)
        and the hard-hat worker ("zombie2.*").  null = the default sheets. */
     zombieSkins: [null, 'zombie2'],
+    /* Decode character sheets a second or more before the game switches
+       to them.  The browser drops decoded images it has not drawn for a
+       while (sooner on a low-memory tablet), so a sheet decoded at boot
+       may have to be decoded again in the frame it is first shown - the
+       sprite then blinks or the frame is late.  A safeguard: on the M5
+       test machine every sheet stayed decoded, so it changed nothing
+       measurable there.  `view` 'front' | 'side'; `names` as the game names them
+       ('zombie.side.die', 'hero.sideCheer'); zombie sheets resolve to the
+       wall's current skin, or to `skin` (the next wall's zombie). */
+    primeSheets(view, names, skin) {
+      const s = view === 'front' ? this.front : this.side;
+      const srcs = [];
+      names.forEach((n) => {
+        const who = n.startsWith('hero.') ? s.hero : s.zombie;
+        const key = skin !== undefined && n.startsWith('zombie.') ? (skin ? skin + n.slice(6) : n) : who.resolve(n);
+        const sp = A.sprite(key); // (a skin may lack a sheet: zombie2 walks on its run sheet)
+        if (sp) srcs.push(sp.src);
+      });
+      return A.decode(srcs);
+    },
     /* Dress the wall's zombie (front + side views) as variant `i`. */
     setZombieSkin(i) {
       this.skinIndex = ((i % this.zombieSkins.length) + this.zombieSkins.length) % this.zombieSkins.length;
@@ -2113,13 +2237,21 @@ window.ZD = window.ZD || {};
          it wraps seamlessly forever. */
       const CLOUD_PX_PER_S = 16;
       let last = performance.now();
+      let pending = 0;
       const tick = (now) => {
         const dt = Math.min(0.1, (now - last) / 1000);
         last = now;
+        pending += dt;
+        if (ZD.device && ZD.device.lowPower && pending < 1 / ZD.device.targetFps) {
+          requestAnimationFrame(tick);
+          return;
+        }
+        const stepDt = pending;
+        pending = 0;
         // every cloud drifts, but only the shown views' clouds are moved on
         // screen (each cloud is its own compositor layer: no repaint)
         const step = (l, scroll, shown) => {
-          l.drift = (l.drift + dt * CLOUD_PX_PER_S * l.speed) % (WORLD_W + l.w);
+          l.drift = (l.drift + stepDt * CLOUD_PX_PER_S * l.speed) % (WORLD_W + l.w);
           if (shown) placeCloud(l, scroll);
         };
         const frontOn = this.front.el.classList.contains('active');

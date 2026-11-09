@@ -31,23 +31,27 @@ never shuffled and use one neutral icon colour; colour appears only as
 feedback.
 
 **Front-view camera** (`FrontScene.frame` + `shots` in `js/scene.js`): the
-view sits in a camera rig that zooms and pans. Camera moves and view swings
-are Web Animations on transform / opacity only (compositor-driven, paused
-with the game via `ZD.clock.track`), and the views and the rig are always
-their own compositor layers (CSS `will-change`, never toggled: promoting a
-view or the rig only for a move rebuilds the layer tree and re-rasterises
-every tile of the view at the start and end of the move, which a weak GPU
-shows as blurred or missing background tiles). The hidden view is
-`visibility: hidden`, so it holds no GPU memory. Before a view swings in it
-is painted unseen, seconds ahead (`camera.prewarm`: the wall title pre-paints
-the front view, the throw pre-paints the side view), so its images are
-decoded and its tiles rastered before anything moves. The swing itself keeps
-the incoming view fully opaque underneath while the old view fades out over
-it: one blended surface, never two half-transparent views over the bare
-stage. Coming from the side view, `camera.to('front', { shot: 'focus' })` is
-one continuous move: the view swings in and the camera glides straight on
-into the wall (`focus`: the wall fills the space left of the answer panel, a
-focus vignette darkens the edges). The opening's light-yellow neon rim lights then fade up
+view sits in a camera rig that zooms and pans. A camera move is one
+`ZD.motion` (GSAP) tween on the frame clock that writes the rig's transform
+(paused with the game by `ZD.motion.freeze`). It is deliberately NOT a
+compositor Web Animation: each time a compositor animation starts or stops
+on the rig, Chrome re-picks the raster scale of every layer inside it and
+re-paints their tiles, which showed as missing tiles at every punch-in and a
+half-drawn wall when the view swung away (see "Performance"). The views and
+the rig are always their own compositor layers (CSS `will-change`, never
+toggled). The hidden view is `visibility: hidden`, so it holds no GPU
+memory. Before a view swings in it is made ready unseen, seconds ahead
+(`camera.prewarm`: the wall title prepares the front view, the throw the
+side view): first every image it draws is decoded (`ZD.assets.decode`),
+then it is painted under the current view, so its tiles are rastered before
+anything moves; `camera.to` waits for both. The swing itself is a **cut on
+motion** (`SWING` in `js/scene.js`): both views drift the same way as one
+camera move and the picture changes at 40 % with a hard one-frame cut - only
+one view is ever on screen, and both stay within 48 px of where they rest, so
+the pre-painted tiles are the ones shown. Coming from the side view,
+`camera.to('front', { shot: 'focus' })` lands on the `focus` shot (the wall
+fills the space left of the answer panel, a focus vignette darkens the
+edges). The opening's light-yellow neon rim lights then fade up
 (`GlassMech.lightUp`; the glows are separate small svgs, so they never
 repaint the zoomed view).
 When an answer is picked, the camera punches in on the window (`lock`) while
@@ -106,10 +110,11 @@ css/style.css              all styling (HUD, options, panels, fx)
 js/
   i18n.js                  game-i18n: T('key'), data-i18n, I18n.say (voice by key)
   core/util.js             DOM helpers, pausable clock, prefs
+  core/perf.js             ?perf diagnostics panel + ?perf=stress transition test
   core/audio.js            procedural SFX (WebAudio) + read-aloud fallback
                            + theme music (assets/audio/theme-song.webm, .mp3 fallback)
                            (speech); silent while page is inactive
-  core/assets.js           manifest access + preloader
+  core/assets.js           manifest access, preloader, decode-before-paint
   core/sprites.js          sprite-sheet animator (one rAF ticker)
   config/missions.js       missions → walls → openings (data only)
   geometry.js              arc/sector/segment paths, piece ids + correctness
@@ -139,6 +144,8 @@ assets/
 tools/build-assets.py      raw art (../circle-game-art/images) → assets/build (Pillow, numpy, scipy)
 tools/sprite_stabilizer.py frame-by-frame registration of AI-drawn sprite sheets
 tools/sprite-qa.py         smoothness check of the built sheets (jitter, slide, seams)
+tools/perf-lab.cjs         GPU rendering lab: missing tiles, dropped frames, offscreen
+                           passes, tile memory per transition (Chrome trace)
 ```
 
 ## Asset pipeline
@@ -314,3 +321,85 @@ Mixed-source art is unified by (1) alpha cleanup in the pipeline,
 (2) per-layer CSS filters (`--f-far`, `--f-mid`, `--f-hero`, `--f-zombie`,
 `--f-wall` in `style.css`) and (3) one soft-light colour-grade overlay plus a
 vignette (`#grade`, `#vignette`). Tweak the CSS variables to retune the look.
+
+## Performance
+
+Target: budget Android tablets (Lenovo K10 class: PowerVR GE8320, 3 GB) and
+low-end Chromebooks. The scene is plain DOM: every moving part is its own
+GPU layer, painted ("rasterised") into tiles once and then moved by the
+compositor. Flicker in this kind of game is almost never "the image wasn't
+loaded" - it is a frame drawn while some layer's tiles were not painted yet.
+
+### Rules (they apply to any HTML/CSS game built this way)
+
+1. **Never scale a layer tree with a compositor animation.** A Web Animation
+   or CSS animation of `transform: scale()` makes Chrome re-pick the raster
+   scale of every layer inside, at the start and the end of the animation,
+   and re-paint all of it - the frames in between show missing or blurred
+   tiles. Zoom from the frame clock (GSAP / rAF writing the transform) and
+   pre-paint at the shot you will show. Translation-only compositor
+   animations are fine.
+2. **Paint before you show.** A view that becomes visible must already be
+   painted: decode its images, then show it at `opacity: 0.001` under the
+   current view a second or more ahead (`camera.prewarm`). An element
+   hidden by `visibility: hidden`, `display: none`, or `opacity: 0` is not
+   painted. Browsers may also occlusion-cull a fully covered layer, so retain
+   it as a compositor scene and confirm raster completion in a trace.
+3. **One view on screen at a time.** Swing between views with a cut on
+   motion, not a long cross-fade (two full scenes blended, one through an
+   offscreen pass) and not a long slide (the incoming view starts off
+   screen, its painted tiles are dropped and come back missing).
+4. **No CSS `filter`, `clip-path`, `mask` or `mix-blend-mode` on an element
+   that is its own GPU layer** (`will-change`, animated transform/opacity,
+   GSAP-tweened). Each one is an offscreen pass redone every frame. Put
+   colour filters on the art inside the layer (`.art`); draw shapes as svg
+   instead of `clip-path`. (`#grade`'s soft-light blend is the one kept on
+   purpose: it is the game's look; it costs two passes per frame.)
+5. **Never toggle `will-change`** on a view or the camera rig, and don't let
+   an animation promote one - the layer tree is rebuilt and every tile
+   re-painted.
+6. **Decode right before use, not just at boot.** The browser drops decoded
+   images it has not drawn for a while (a K10's budget is small), so a
+   sprite sheet switched to minutes after loading may need decoding in the
+   frame it is shown - the sprite blinks. Decode what a view or an outcome
+   will draw a second ahead (`ZD.assets.decode`, `ZD.scene.primeSheets`).
+   Never keep decoded copies yourself (canvas / ImageBitmap): that doubles
+   the memory.
+7. **Keep long work off swings.** Building the AudioContext (~100 ms),
+   big DOM rebuilds or style changes on a high ancestor (`#stage`) must not
+   happen on the frame a move starts.
+
+### Measuring (screenshots can't)
+
+A screenshot waits for every tile to be painted, so it never shows the
+frames where one is missing - that is why Playwright shots looked fine.
+Use the compositor's own records:
+
+* `?perf` - a small panel: fps, frame time, dropped frames, long tasks /
+  long animation frames, layout shifts, JS heap, the camera's last event,
+  image decodes, the worst frame of the last swing. `ZD.perf.report()` in
+  the console lists every swing / camera move with its worst frame and the
+  slowest long frames with the script responsible.
+* `?perf=stress&n=20` - after loading, takes the game over and repeats a
+  wall's camera work (prewarm, swing to front, lock / wide / impact, swing
+  back) n times, then shows the worst swing frame and drops. Runs on a real
+  tablet - no laptop needed.
+* `tools/perf-lab.cjs` - a Chrome trace on a real GPU (Mac: Metal) of
+  `--scenario stress | intro | game` (game = the whole mission played
+  hands-free), with per-phase **checkerboard frames** (drawn with missing
+  tiles - the flicker), dropped frames, offscreen passes and tile memory.
+  `--frames dir` saves every composited frame; `--strict` fails on any
+  missing tile. Needs `playwright-core` (`NODE_PATH=...`).
+* Chrome DevTools: *Rendering* > Frame Rendering Stats (fps + GPU memory),
+  Layer borders (orange = GPU layers), Paint flashing (green = re-painted;
+  nothing should flash during a camera move). *Performance* > record a
+  transition: the `zd:` marks are in the Timings track.
+
+Telling the causes apart: a missing image for many frames that a reload
+fixes = **loading** (`stats.failed`, "missing images" in the panel); a
+blink on the first frame something is shown = **decode** (long "Decode
+image" / "Image Decode" tasks in the trace); the whole picture freezes while
+compositor moves carry on = **main-thread scheduling** (long animation
+frames with script time); green flashes during a move = **paint**; holes or
+blurred patches with no main-thread work = **raster / GPU** (checkerboard
+frames in perf-lab, tile memory near the limit in Frame Rendering Stats).

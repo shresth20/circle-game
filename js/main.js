@@ -38,6 +38,12 @@ async function boot() {
   ZD.scene.init(document.getElementById('world'));
   ZD.ui.init(stage);
   ZD.controls.init(stage);
+  // Decode only the initial side view now. The front view and later sprite
+  // sheets are decoded by camera.prewarm / primeSheets before they appear.
+  await ZD.scene.camera.prepareCurrent();
+  // AudioContext construction is expensive on some tablets; create the
+  // suspended graph under the loading screen, then unlock it on the gesture.
+  ZD.audio.prime();
 
   // the loader is the welcome screen: ZD.intro.title() swaps it for the real
   // one (identical layout) and brings in the play button

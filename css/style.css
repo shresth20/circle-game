@@ -100,14 +100,20 @@ button { font-family: inherit; }
 }
 .layer.prop { background-repeat: no-repeat; }
 .layer.tiled .tile { position: absolute; top: 0; background-repeat: no-repeat; background-position: 0 0; }
-.layer.far { filter: var(--f-far); }
-.layer.sun {
-  position: absolute;
+/* the art of a moving layer (see propLayer / sunLayer in js/scene.js) */
+.layer.prop > .art, .layer.sun > .art { position: absolute; inset: 0; background-repeat: no-repeat; }
+/* Colour filters go on the ART (.art: a still prop itself, a tile, the
+   inner art of a moving prop), never on a layer that moves on its own
+   (will-change): there the GPU would re-apply the filter every frame in
+   an offscreen pass - 11-13 such passes per frame before (measured).  On
+   the art it is applied once, when the tiles are painted: same pixels. */
+.layer.far.art, .layer.far > .art { filter: var(--f-far); }
+.layer.sun > .art {
   border-radius: 50%;
   background: linear-gradient(180deg, #f9c414 0%, #f6a31c 55%, #ef7a22 100%);
   box-shadow: 0 0 60px rgba(255, 190, 60, 0.35);
 }
-.layer.mid { filter: var(--f-mid); }
+.layer.mid.art, .layer.mid > .art { filter: var(--f-mid); }
 .wall-stage, .wall-side {
   position: absolute;
   background-size: 100% 100%;
@@ -131,11 +137,15 @@ button { font-family: inherit; }
 /* generated scenery band (Scatter in js/scene.js): moved as one by transform */
 .scatter { position: absolute; left: 0; top: 0; width: 0; height: 0; pointer-events: none; will-change: transform; }
 /* dry trees and towers are faded a little into the evening haze so they
-   stay scenery and never compete with the wall, hero or zombie */
-.scatter.mid { filter: var(--f-mid) brightness(0.94) saturate(0.86); opacity: 0.82; }
-.layer.prop.faded { filter: var(--f-mid) brightness(0.94) saturate(0.86); opacity: 0.82; }
+   stay scenery and never compete with the wall, hero or zombie (the fade
+   is the band's / layer's opacity, the tint is on each prop's art) */
+.scatter.mid { opacity: 0.82; }
+.scatter.mid > .art { filter: var(--f-mid) brightness(0.94) saturate(0.86); }
+.layer.prop.faded { opacity: 0.82; }
+.layer.prop.faded.art, .layer.prop.faded > .art { filter: var(--f-mid) brightness(0.94) saturate(0.86); }
 /* farthest trees/towers sink into the evening haze */
-.scatter.far.distant { filter: var(--f-far) brightness(0.86) saturate(0.74); opacity: 0.72; }
+.scatter.far.distant { opacity: 0.72; }
+.scatter.far.distant > .art { filter: var(--f-far) brightness(0.86) saturate(0.74); }
 .layer.baked { background-size: 100% 100%; background-repeat: no-repeat; }
 
 /* colour grade: one soft-light wash unifies every asset under the sunset */
@@ -257,9 +267,10 @@ button { font-family: inherit; }
 .glass-ping-layer { opacity: 0; }
 
 /* ---------------- front-view camera rig ---------------- */
-/* The rig is a compositor layer for good (FrontScene.frame animates its
-   transform; promoting it per move re-rasterised the whole view twice per
-   move).  Clip the 2560px-wide scenery to the 1920x1080 camera aperture
+/* The rig is a compositor layer for good (FrontScene.frame moves and
+   zooms it, from the frame clock - not a compositor animation, whose start
+   and end re-paint every layer inside it; promoting it per move
+   re-rasterised the whole view twice per move).  Clip the 2560px-wide scenery to the 1920x1080 camera aperture
    before compositing.  Without this clip, Retina screens rasterise a
    >4096px transformed surface; its last GPU tile can arrive late as a flat
    purple block at bottom-right. */
@@ -343,7 +354,10 @@ button { font-family: inherit; }
   pointer-events: none;
 }
 .fx { position: absolute; inset: 0; pointer-events: none; }
-.shard { position: absolute; margin: -8px 0 0 -8px; box-shadow: 0 0 8px rgba(255, 255, 255, 0.5); }
+/* glass shard: an svg triangle (fx.shards) - no clip-path / shadow, which
+   would be a GPU mask pass per shard while it flies */
+.shard { position: absolute; margin: -8px 0 0 -8px; }
+.shard svg { display: block; overflow: visible; }
 .spark { position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%; box-shadow: 0 0 14px 2px currentColor; }
 .ring { position: absolute; border: 6px solid; border-radius: 50%; }
 .puff {
@@ -499,6 +513,14 @@ button { font-family: inherit; }
 .ctrl-btn.jump.hint .ctrl-ring { border-color: var(--yellow); }
 .ctrl-btn.hint .ctrl-face { animation: ctrl-bob 1s ease-in-out infinite; }
 .ctrl-btn.hint.pressed .ctrl-face { animation: none; }
+/* Own GPU layers for as long as the controller is shown (display none
+   otherwise): its pop-in (GSAP) and the hint pulse (CSS animations) then
+   never create or drop a layer mid-game - a freshly created layer can be
+   drawn unpainted for a frame, i.e. the button face blinks as the hint
+   starts (a trace showed missing-tile frames at the moments RUN / JUMP
+   came up and began to pulse). */
+.ctrl-btn, .ctrl-face { will-change: transform; }
+.ctrl-ring { will-change: transform, opacity; }
 @keyframes ctrl-pulse {
   from { transform: scale(1); opacity: 0.9; }
   to { transform: scale(1.4); opacity: 0; }
@@ -1069,3 +1091,21 @@ button { font-family: inherit; }
 }
 @media (orientation: portrait) and (max-width: 820px) { #rotate { display: flex; } }
 
+
+/* ---------------- ?perf diagnostics panel (js/core/perf.js) ---------------- */
+/* Outside the stage (never scaled, never in a scene's layers); plain text
+   refreshed twice a second, contained so it never lays out anything else. */
+.perf-panel {
+  position: fixed;
+  left: 8px;
+  top: 8px;
+  z-index: 1000;
+  padding: 6px 9px;
+  border-radius: 6px;
+  background: rgba(10, 4, 24, 0.82);
+  color: #e8ffe8;
+  font: 12px/1.4 ui-monospace, Menlo, Consolas, monospace;
+  white-space: pre;
+  pointer-events: none;
+  contain: layout paint;
+}

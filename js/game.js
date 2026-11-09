@@ -36,6 +36,16 @@ window.ZD = window.ZD || {};
   /* Game-over camera (game.defeatCam): zoom, and where the fallen boy's
      body lands on screen (stage px) - centred across, low on screen,
      under the centred sign + Replay button */
+  /* Character sheets each beat switches to, decoded ahead of it
+     (ZD.scene.primeSheets) so no sprite blinks on its first frame:
+     throw = the front view's throw and its reactions, win / lose = the
+     side view after the piece goes through / the glass breaks. */
+  const SHEETS = {
+    throw: ['hero.backThrow', 'hero.backCheer', 'hero.backFear', 'zombie.front.hit', 'zombie.front.attack'],
+    win: ['zombie.side.hit', 'zombie.side.die', 'zombie.side.dead', 'hero.sideCheer', 'hero.sideRun', 'hero.sideLeap', 'hero.sideJump'],
+    lose: ['zombie.side.run', 'zombie.side.leap', 'zombie.side.attack', 'hero.sideFear', 'hero.sideFall'],
+    arrive: ['zombie.side.walk', 'zombie.side.run', 'zombie.side.idle'],
+  };
   const DEFEAT_FOCUS = { x: 960, y: 960 };
   const DEFEAT_SHIFT = { x: 260, y: 90 };
   const REPLAY_ICON = '<svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.34-5.66" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/><path d="M20.5 3.5v5h-5" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
@@ -238,6 +248,8 @@ window.ZD = window.ZD || {};
         // (after the last wall: to the safe zone)
         const last = wi === this.walls.length - 1;
         const next = wi + 1;
+        // the next wall's zombie (the other skin) walks in at the end of the run
+        if (!last) ZD.scene.primeSheets('side', SHEETS.arrive, ZD.scene.zombieSkins[next % ZD.scene.zombieSkins.length]);
         await this.runAndJump(E, last ? { distance: 2000, gate: true } : { distance: 1750, onPass: () => ZD.scene.setZombieSkin(next) });
         this.guard(E);
         // build the next wall's front-view land now (it is hidden), not on
@@ -261,6 +273,7 @@ window.ZD = window.ZD || {};
       // reveal: by the time the view swings (seconds from now) its images
       // are decoded and its tiles rastered, so nothing pops in mid-move
       camera.prewarm('front', { shot: 'focus' });
+      ZD.scene.primeSheets('front', SHEETS.throw);
       // short lines, one at a time
       const keys = wall.retry ? ['guideRetry', 'guideRetry2'] : wall.n === wall.total ? ['guideWallLast'] : ['guideWall', 'guideZombie'];
       wall.coach = wall.n === 1 || !!wall.retry;
@@ -437,7 +450,9 @@ window.ZD = window.ZD || {};
       const { front, camera } = ZD.scene;
       const P = front.projectile;
       // the side view is painted now, unseen: the outcome swings to it
+      // (with the sheets its characters will switch to decoded)
       camera.prewarm('side');
+      if (!correct || final) ZD.scene.primeSheets('side', correct ? SHEETS.win : SHEETS.lose);
       P.setSpec(spec, 0);
       P.show(false);
       ZD.audio.play('pick');
@@ -529,6 +544,7 @@ window.ZD = window.ZD || {};
     async timeUpFront(E) {
       const { front, camera } = ZD.scene;
       camera.prewarm('side'); // the view swings to the side after the bang
+      ZD.scene.primeSheets('side', SHEETS.lose);
       ZD.ui.hideGrid();
       ZD.audio.play('alarm');
       front.hero.play({ sheet: 'hero.backFear', fps: 14 }).then(() => front.hero.setFrame(11));

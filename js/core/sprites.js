@@ -7,6 +7,7 @@ window.ZD = window.ZD || {};
   const live = new Set();
   let paused = false;
   let last = 0;
+  let pending = 0;
 
   /* Display refresh interval (s), the median of recent rAF steps.  Sprite
      frames are held for a whole number of refreshes: 16 fps on a 60 Hz
@@ -33,7 +34,13 @@ window.ZD = window.ZD || {};
     last = t;
     if (paused) return;
     sampleRefresh(raw);
-    const dt = Math.min(0.1, raw);
+    pending += Math.min(0.1, raw);
+    // On a constrained device, update sprite state at a stable 30 Hz. The
+    // elapsed time is accumulated, so animation speed never changes and the
+    // browser still composites intermediate transforms smoothly.
+    if (ZD.device && ZD.device.lowPower && pending < 1 / ZD.device.targetFps) return;
+    const dt = Math.min(0.1, pending);
+    pending = 0;
     live.forEach((s) => s._advance(dt));
   }
   requestAnimationFrame((t) => {
@@ -110,6 +117,7 @@ window.ZD = window.ZD || {};
       if (!s) throw new Error('unknown sprite ' + key);
       this.sheet = s;
       this.sheetKey = key;
+      if (ZD.perf && ZD.perf.on) ZD.perf.mark('sprite.sheet', key);
       this.anchorY = s.anchorY != null ? s.anchorY : this.anchorY;
       const st = this.img.style;
       st.width = s.fw + 'px';

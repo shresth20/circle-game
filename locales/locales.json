@@ -108,6 +108,17 @@
     "guideClearedLast": "Run to the *Safe Zone*!",
     "guideWrong": "Oh no! It was a *{name}*.",
     "guideTimeUp": "Time up! It was a *{name}*.",
-    "guideSafe": "You reached the *Safe Zone*!"
+    "guideSafe": "You reached the *Safe Zone*!",
+    "perfFps": "{fps} fps · frame {avg} ms · worst {worst} ms",
+    "perfDrops": "dropped frames {drops} · over 50 ms {long}",
+    "perfTasks": "long tasks {n} ({ms} ms) · long frames (LoAF) {loaf}",
+    "perfShift": "layout shift {cls}",
+    "perfHeap": "JS heap {mb} MB",
+    "perfView": "view {view} · {event}",
+    "perfDecode": "image decodes {n} · slowest {ms} ms {src}",
+    "perfFailed": "missing images {n}",
+    "perfLast": "last swing: worst frame {worst} ms · dropped {drops}",
+    "perfStress": "stress test {i}/{n}",
+    "perfStressDone": "stress done: {n} swings · worst frame {worst} ms · dropped {drops} · reload to play"
   }
 }
