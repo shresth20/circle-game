@@ -811,6 +811,9 @@ button { font-family: inherit; }
   align-items: center;
   gap: 18px;
   background: #2a123f url('../assets/build/bg/road-persp.webp') center / cover no-repeat;
+  /* main.js sets --welcome-bg (the preloaded copy) only if this request of
+     the stylesheet's never finished - a phone can lose one */
+  background-image: var(--welcome-bg, url('../assets/build/bg/road-persp.webp'));
   justify-content: center;
 }
 #loader.welcome-screen { position: absolute; inset: 0; display: flex; z-index: 200; color: #fff; }

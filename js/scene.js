@@ -2012,10 +2012,10 @@ window.ZD = window.ZD || {};
        now: its layers' backgrounds, the wall cover's svg image and the
        characters' current sheets. */
     _images(name) {
-      const base = A.url('');
       const out = new Set();
       const add = (u) => {
-        if (u && u.startsWith(base)) out.add(u.slice(base.length));
+        const src = A.srcOf(u); // drawn from its downloaded copy (blob:) or by path
+        if (src) out.add(src);
       };
       const view = this._scene(name).el;
       view.querySelectorAll('[style*="background-image"]').forEach((n) => {
@@ -2082,11 +2082,11 @@ window.ZD = window.ZD || {};
     /* Initial view: decode before the welcome screen can leave.  Unlike a
        prewarm this does not activate another scene or allocate two scene
        surfaces; it only makes the already-current scene paint-ready. */
-    async prepareCurrent() {
+    async prepareCurrent(onProgress) {
       if (!this.current) return;
       const view = this._scene(this.current).el;
       mark('camera.prepare', this.current);
-      await ZD.assets.decode(this._images(this.current));
+      await ZD.assets.decode(this._images(this.current), onProgress);
       view.getBoundingClientRect();
       await ZD.util.nextFrame();
       await ZD.util.nextFrame();

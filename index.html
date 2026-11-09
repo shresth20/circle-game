@@ -8,6 +8,13 @@
   <meta name="theme-color" content="#1a0f33" />
   <title>Zombie Defense — Parts of a Circle</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='28' fill='%235b2a86' stroke='%23ffd166' stroke-width='4'/%3E%3Cpath d='M32 32 L32 6 A26 26 0 0 1 56 40 Z' fill='%23ffb347'/%3E%3C/svg%3E" />
+  <!-- the loading screen's own picture, logo and text faces first, so it
+       looks finished at once on a slow phone (js/core/assets.js then
+       downloads the rest before the play button appears) -->
+  <link rel="preload" href="assets/build/bg/road-persp.webp" as="image" fetchpriority="high" />
+  <link rel="preload" href="assets/build/ui/welcome-logo.webp" as="image" fetchpriority="high" />
+  <link rel="preload" href="assets/fonts/Nunito.woff2" as="font" type="font/woff2" crossorigin />
+  <link rel="preload" href="assets/fonts/LilitaOne.woff2" as="font" type="font/woff2" crossorigin />
   <link rel="stylesheet" href="css/style.css" />
 </head>
 <body>

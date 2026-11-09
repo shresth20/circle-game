@@ -114,7 +114,8 @@ js/
   core/audio.js            procedural SFX (WebAudio) + read-aloud fallback
                            + theme music (assets/audio/theme-song.webm, .mp3 fallback)
                            (speech); silent while page is inactive
-  core/assets.js           manifest access, preloader, decode-before-paint
+  core/assets.js           manifest access, preloader (everything before Play,
+                           stall-proof), decode-before-paint
   core/sprites.js          sprite-sheet animator (one rAF ticker)
   config/missions.js       missions → walls → openings (data only)
   geometry.js              arc/sector/segment paths, piece ids + correctness
@@ -368,6 +369,22 @@ loaded" - it is a frame drawn while some layer's tiles were not painted yet.
 7. **Keep long work off swings.** Building the AudioContext (~100 ms),
    big DOM rebuilds or style changes on a high ancestor (`#stage`) must not
    happen on the frame a move starts.
+8. **Load everything before Play, and never wait on a lost request.** The
+   play button appears only when every file the game uses is in memory:
+   every image, both fonts, the theme music (`ZD.assets.preload`). Files are
+   downloaded with `fetch()` and drawn from their `blob:` copies, so nothing
+   touches the network after Play. A phone can lose a request without an
+   error (switching cells, a dead connection) and the browser then waits
+   minutes; a request that receives no bytes for 15 s is cancelled and asked
+   again (patience doubles per attempt; `fetch` + `AbortController` is the
+   only request WebKit really cancels - a cancelled `<img>` keeps its
+   connection). Offline, the loader waits for the connection to come back.
+   The loading line shows the percentage, "Slow internet..." after a stall
+   and "No internet. Waiting..." when offline, so a learner can see it is
+   not stuck. A file that still fails after 5 attempts is reported in
+   `stats.failed` and the game starts anyway. Test it with a server that
+   hangs and throttles requests, in Chromium and WebKit, never only on a
+   fast desktop connection.
 
 ### Measuring (screenshots can't)
 

@@ -16,6 +16,10 @@ window.ZD = window.ZD || {};
      Opus/WebM (64 kbps, ~1.3 MB); the MP3 is only fetched by browsers that
      cannot play WebM Opus (older iOS Safari). */
   const MUSIC_SRC = new Audio().canPlayType('audio/webm; codecs="opus"') ? 'assets/audio/theme-song.webm' : 'assets/audio/theme-song.mp3';
+  /* ZD.assets.preload downloads the file with the images and hands it over
+     (useMusicBlob), so Play starts the music with no network wait.  If that
+     failed, the element streams MUSIC_SRC as before. */
+  let musicUrl = MUSIC_SRC;
   const MUSIC_VOL = 0.35;
   let musicEl = null;
   let musicBus = null;
@@ -306,7 +310,7 @@ window.ZD = window.ZD || {};
     musicOn = on;
     if (!ensure()) return;
     if (!musicEl) {
-      musicEl = new Audio(MUSIC_SRC);
+      musicEl = new Audio(musicUrl);
       musicEl.loop = true;
       musicEl.preload = 'auto';
       musicEl.addEventListener('error', () => console.warn('theme music missing:', MUSIC_SRC));
@@ -338,6 +342,13 @@ window.ZD = window.ZD || {};
        from the first animation frame. */
     prime() {
       if (!state.muted) ensure();
+    },
+    /* The theme file the preloader should fetch. */
+    musicSrc: MUSIC_SRC,
+    /* Play the theme from these preloaded bytes (before music() first runs). */
+    useMusicBlob(blob) {
+      if (musicEl || !window.URL || !URL.createObjectURL) return;
+      musicUrl = URL.createObjectURL(blob);
     },
     /* Call from a user gesture (tap) to unlock audio on mobile browsers. */
     unlock() {

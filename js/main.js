@@ -24,23 +24,66 @@ window.addEventListener('resize', fitStage);
 window.addEventListener('orientationchange', () => setTimeout(fitStage, 200));
 fitStage();
 
+/* The loading screen: bar + one status line.  Downloads take the bar to
+   90 %, decoding the first view the last 10 %.  The line shows the
+   percentage, and says so when the network is slow or gone, so a learner on
+   a phone can see the game is not stuck.  Text waits for the locales. */
+const loading = (() => {
+  const bar = document.querySelector('#loader .bar > div');
+  const text = document.querySelector('#loader .loader-text');
+  let shown = '';
+  let p = 0;
+  let status = '';
+  let ready = false;
+  let queued = false;
+  const draw = () => {
+    queued = false;
+    if (bar) bar.style.transform = `scaleX(${p})`;
+    if (!ready || !text) return;
+    const pct = Math.floor(p * 100);
+    const line = status === 'offline' ? T('appOffline') : T(status === 'slow' ? 'appLoadingSlow' : 'appLoadingPct', { pct });
+    if (line !== shown) text.textContent = shown = line;
+  };
+  return {
+    // progress arrives per received chunk; the screen is updated once a frame
+    set(fraction, net) {
+      p = Math.max(p, fraction); // never runs backwards
+      status = net || '';
+      if (!queued) {
+        queued = true;
+        requestAnimationFrame(draw);
+      }
+    },
+    ready() {
+      ready = true;
+      draw();
+    },
+  };
+})();
+
+/* Start downloading now, in parallel with the locales - not after them. */
+const preloading = ZD.assets.preload((f, net) => loading.set(f * 0.9, net)).catch((e) => console.error('preload failed', e));
+
 async function boot() {
   const stage = document.getElementById('stage');
-  const bar = document.querySelector('#loader .bar > div');
-  try {
-    await ZD.assets.preload((p) => {
-      bar.style.transform = `scaleX(${p})`;
-    });
-  } catch (e) {
-    console.error('preload failed', e);
-  }
+  await preloading;
+  // The welcome picture is a CSS background by path (so the loading screen
+  // has it at once).  If that request of the page's (<link rel=preload> /
+  // stylesheet) never finished - a phone can lose one - draw the
+  // preloader's downloaded copy instead.  Resource timing lists a request
+  // only once it has finished; the preloader's own fetch is left out.
+  const welcomePath = new URL(ZD.assets.url('') + ZD.assets.image('roadPersp').src, document.baseURI).href;
+  const welcomeShown = performance.getEntriesByName(welcomePath).some((e) => e.initiatorType !== 'fetch' && e.responseEnd > 0);
+  const welcomeCopy = ZD.assets.imageUrl('roadPersp');
+  if (!welcomeShown && welcomeCopy.startsWith('blob:')) document.documentElement.style.setProperty('--welcome-bg', `url("${welcomeCopy}")`);
 
   ZD.scene.init(document.getElementById('world'));
   ZD.ui.init(stage);
   ZD.controls.init(stage);
   // Decode only the initial side view now. The front view and later sprite
   // sheets are decoded by camera.prewarm / primeSheets before they appear.
-  await ZD.scene.camera.prepareCurrent();
+  await ZD.scene.camera.prepareCurrent((f) => loading.set(0.9 + 0.1 * f));
+  loading.set(1);
   // AudioContext construction is expensive on some tablets; create the
   // suspended graph under the loading screen, then unlock it on the gesture.
   ZD.audio.prime();
@@ -74,5 +117,6 @@ async function boot() {
 
 I18n.load(() => {
   I18n.applyStatic();
+  loading.ready();
   boot();
 });
