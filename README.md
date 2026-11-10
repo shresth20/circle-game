@@ -40,11 +40,13 @@ re-paints their tiles, which showed as missing tiles at every punch-in and a
 half-drawn wall when the view swung away (see "Performance"). The views and
 the rig are always their own compositor layers (CSS `will-change`, never
 toggled). The hidden view is `visibility: hidden`, so it holds no GPU
-memory. Before a view swings in it is made ready unseen, seconds ahead
+memory. Before a view swings in it is made ready in two steps: seconds ahead
 (`camera.prewarm`: the wall title prepares the front view, the throw the
-side view): first every image it draws is decoded (`ZD.assets.decode`),
-then it is painted under the current view, so its tiles are rastered before
-anything moves; `camera.to` waits for both. The swing itself is a **cut on
+side view) every image it draws is decoded (`ZD.assets.decode`); right
+before the move `camera.to` paints it unseen under the current view and
+starts the move only after a real browser paint, so its tiles are rastered
+before anything moves (both views hold GPU tiles only for that moment and
+the swing). The swing itself is a **cut on
 motion** (`SWING` in `js/scene.js`): both views drift the same way as one
 camera move and the picture changes at 40 % with a hard one-frame cut - only
 one view is ever on screen, and both stay within 48 px of where they rest, so
@@ -321,7 +323,8 @@ loses focus, the AudioContext is suspended (`ZD.audio.setActive`, wired in
 Mixed-source art is unified by (1) alpha cleanup in the pipeline,
 (2) per-layer CSS filters (`--f-far`, `--f-mid`, `--f-hero`, `--f-zombie`,
 `--f-wall` in `style.css`) and (3) one soft-light colour-grade overlay plus a
-vignette (`#grade`, `#vignette`). Tweak the CSS variables to retune the look.
+vignette (`#grade`, `#vignette`: small canvases drawn by `paintWashes` in
+`js/scene.js`). Tweak the CSS variables / those gradients to retune the look.
 
 ## Performance
 
@@ -330,6 +333,22 @@ low-end Chromebooks. The scene is plain DOM: every moving part is its own
 GPU layer, painted ("rasterised") into tiles once and then moved by the
 compositor. Flicker in this kind of game is almost never "the image wasn't
 loaded" - it is a frame drawn while some layer's tiles were not painted yet.
+
+**The budget.** Chrome keeps every layer's painted tiles in a fixed GPU
+budget: 512 MB on a desktop, about 128-256 MB on a 2-4 GB Android tablet
+(Chrome sizes it from the device's memory). When the tiles the screen needs
+right now do not fit, it draws the frame anyway: some tiles are missing
+(holes, "not loaded") or stand-ins at another scale are shown (blurred,
+"pixelated"), until it catches up. A desktop never hits the limit, which is
+why the flicker only shows on a tablet - and why it starts late in a game:
+the need grows with what the game has built (layers, scenery, both views
+painted around a swing) until it crosses the budget. Measured 2026-11-10
+(`tools/perf-lab.cjs --scenario game --gpu-mem 128`, a 1920x1200 tablet):
+the committed build needed 202-353 MB of on-screen tiles per wall (peaks at
+every swing, higher at later walls): 52 checkerboard frames at a 128 MB
+budget, 6 at 256 MB (walls 3 and 5). After the rules below it needs at most
+~140 MB (3 checkerboard frames at 128 MB, none at 256 MB or on a desktop).
+See PERFORMANCE_AUDIT.md.
 
 ### Rules (they apply to any HTML/CSS game built this way)
 
@@ -340,12 +359,14 @@ loaded" - it is a frame drawn while some layer's tiles were not painted yet.
    tiles. Zoom from the frame clock (GSAP / rAF writing the transform) and
    pre-paint at the shot you will show. Translation-only compositor
    animations are fine.
-2. **Paint before you show.** A view that becomes visible must already be
-   painted: decode its images, then show it at `opacity: 0.001` under the
-   current view a second or more ahead (`camera.prewarm`). An element
-   hidden by `visibility: hidden`, `display: none`, or `opacity: 0` is not
-   painted. Browsers may also occlusion-cull a fully covered layer, so retain
-   it as a compositor scene and confirm raster completion in a trace.
+2. **Paint before you show - but not long before.** A view that becomes
+   visible must already be painted: decode its images a second or more
+   ahead (`camera.prewarm`), then show it at `opacity: 0.001` under the
+   current view and wait for a real paint (layout + two animation frames)
+   right before the move (`camera.to`). An element hidden by
+   `visibility: hidden`, `display: none`, or `opacity: 0` is not painted.
+   Painted seconds ahead, the hidden view's tiles compete with the visible
+   one's for the whole wait, and on a tablet the VISIBLE view loses tiles.
 3. **One view on screen at a time.** Swing between views with a cut on
    motion, not a long cross-fade (two full scenes blended, one through an
    offscreen pass) and not a long slide (the incoming view starts off
@@ -358,18 +379,48 @@ loaded" - it is a frame drawn while some layer's tiles were not painted yet.
    purpose: it is the game's look; it costs two passes per frame.)
 5. **Never toggle `will-change`** on a view or the camera rig, and don't let
    an animation promote one - the layer tree is rebuilt and every tile
-   re-painted.
-6. **Decode right before use, not just at boot.** The browser drops decoded
+   re-painted. Never add it per tween either (`ZD.motion` doesn't): a
+   `will-change: transform` layer keeps the scale it was first painted at,
+   so anything that pops up from small stays pixelated.
+6. **Inside a scaled stage, promote big things with `will-change: opacity`,
+   not `transform`.** The 1920x1080 stage is shrunk to the screen (x0.67 on
+   a 1280-wide tablet, about x0.35 on a phone). Chrome paints a layer that
+   has `will-change: transform` - or sits inside one - at no less than the
+   screen's full resolution, ignoring that shrink: such a layer holds
+   (1 / scale)^2 times the tiles it shows (2.25x on the tablet, ~9x on a
+   phone). `#world` and the views use `will-change: opacity` (+ a fixed
+   identity `transform`, so a shake / swing only changes a value); only
+   small moving parts (sprites, clouds, the projectile, UI) and the camera
+   rig (its zoom must never re-paint) keep `will-change: transform`.
+7. **Few, small layers at rest; parallax layers only while scrolling.**
+   Every layer is a screen of tiles where it shows. The parallax strips,
+   bands, wall slots and the safe zone (`.scrolls`) get their own layers
+   (`will-change: opacity`, rule 6) only while the side view scrolls
+   (`side.setScrolling`, on in
+   `prepareRun`, off in `finishRun` - switched while the picture is
+   still). At rest and during a swing they are painted together. A strip is
+   clipped to the world's width (`.strip-clip`): a 7-10k px wide strip can't
+   share a layer (the browser refuses to merge mostly-empty space), so each
+   kept a screen of tiles. Nothing may grow with the distance run (a
+   scenery band once kept its first props and widened at every wall).
+8. **No full-screen gradients in GPU tiles.** A smooth gradient looks the
+   same from a fifth of its pixels: the colour grade, vignettes, alarm
+   light and page backdrop are drawn once into small canvases that the GPU
+   stretches (`paintWashes`; ~0.7 MB each instead of ~23 MB of tiles).
+9. **Decode right before use, not just at boot.** The browser drops decoded
    images it has not drawn for a while (a K10's budget is small), so a
    sprite sheet switched to minutes after loading may need decoding in the
    frame it is shown - the sprite blinks. Decode what a view or an outcome
    will draw a second ahead (`ZD.assets.decode`, `ZD.scene.primeSheets`).
    Never keep decoded copies yourself (canvas / ImageBitmap): that doubles
    the memory.
-7. **Keep long work off swings.** Building the AudioContext (~100 ms),
+10. **Keep long work off swings.** Building the AudioContext (~100 ms),
    big DOM rebuilds or style changes on a high ancestor (`#stage`) must not
    happen on the frame a move starts.
-8. **Load everything before Play, and never wait on a lost request.** The
+11. **Repaint after a resize.** Layers with `will-change: transform` keep
+   their paint scale when the stage is resized; `fitStage` calls
+   `ZD.scene.repaint()` once the size settles (hints lifted for two frames).
+12. **Load everything before Play, and never wait on a lost request.** The
    play button appears only when every file the game uses is in memory:
    every image, both fonts, the theme music (`ZD.assets.preload`). Files are
    downloaded with `fetch()` and drawn from their `blob:` copies, so nothing
@@ -381,10 +432,11 @@ loaded" - it is a frame drawn while some layer's tiles were not painted yet.
    connection). Offline, the loader waits for the connection to come back.
    The loading line shows the percentage, "Slow internet..." after a stall
    and "No internet. Waiting..." when offline, so a learner can see it is
-   not stuck. A file that still fails after 5 attempts is reported in
-   `stats.failed` and the game starts anyway. Test it with a server that
-   hangs and throttles requests, in Chromium and WebKit, never only on a
-   fast desktop connection.
+   not stuck. A file that still fails after 5 attempts keeps the loader up
+   with "Some game files could not load..." (`appLoadFailed`) - the game
+   never starts with a missing background or character. Test it with a
+   server that hangs and throttles requests, in Chromium and WebKit, never
+   only on a fast desktop connection.
 
 ### Measuring (screenshots can't)
 
@@ -405,8 +457,17 @@ Use the compositor's own records:
   `--scenario stress | intro | game` (game = the whole mission played
   hands-free), with per-phase **checkerboard frames** (drawn with missing
   tiles - the flicker), dropped frames, offscreen passes and tile memory.
-  `--frames dir` saves every composited frame; `--strict` fails on any
-  missing tile. Needs `playwright-core` (`NODE_PATH=...`).
+  `--gpu-mem 128` gives Chrome a budget tablet's tile budget (the flicker
+  only shows when it is short); `--raster-scale` reads Chrome's per-frame
+  layer snapshots: frames with **holes** (tiles not painted), **pixelated**
+  layers (painted below the scale they are shown at), the **MB of tiles
+  the screen needs now** (`nowMB` - keep it well under the budget), and a
+  per-wall table (does it get worse toward the end?); `--layers-detail`
+  lists the biggest layers with why Chrome made them; `--layers` samples
+  the layer tree at every settled view. A K10 is `--viewport 1280x800
+  --dpr 1.5 --low-power`. `--frames dir` saves every composited frame;
+  `--strict` fails on any missing tile. Needs `playwright-core`
+  (`NODE_PATH=...`).
 * Chrome DevTools: *Rendering* > Frame Rendering Stats (fps + GPU memory),
   Layer borders (orange = GPU layers), Paint flashing (green = re-painted;
   nothing should flash during a camera move). *Performance* > record a

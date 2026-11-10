@@ -278,6 +278,7 @@ window.ZD = window.ZD || {};
         side.removeGate();
         side.zombieOffset = 0;
         side.setScroll(0);
+        side.setScrolling(false); // (prepareRun switched it on for the pan)
         // the front view (step 4) is painted now, unseen, so it swings in
         // with every tile ready
         camera.prewarm('front', { shot: 'focus' });

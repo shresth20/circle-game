@@ -77,6 +77,13 @@ window.ZD = window.ZD || {};
   const decodeQueue = [];
   let activeDecodes = 0;
   const stats = { loaded: 0, failed: [], retries: 0, stalls: 0, decodes: 0, decodeMs: 0, slowest: { src: '', ms: 0 }, decodeConcurrency: DECODE_CONCURRENCY };
+  const markFailed = (src) => {
+    if (!stats.failed.includes(src)) stats.failed.push(src);
+  };
+  const clearFailed = (src) => {
+    const i = stats.failed.indexOf(src);
+    if (i >= 0) stats.failed.splice(i, 1);
+  };
 
   const net = { slow: false, offline: navigator.onLine === false };
   let onNet = null; // preload's status listener
@@ -186,47 +193,50 @@ window.ZD = window.ZD || {};
   /* The Image for `src` (bytes downloaded, not decoded). */
   function loadImage(src, onBytes) {
     if (cache.has(src)) return cache.get(src);
-    const p = (async () => {
-      try {
-        let refused = false;
-        if (!plainOnly) {
-          let blob = null;
-          try {
-            blob = await fetchBlob(BASE + src, onBytes);
-          } catch (e) {
-            if (e.stalled) throw e; // the network itself: a plain request would wait too
-          }
-          if (blob) {
-            const u = URL.createObjectURL(blob);
-            try {
-              const img = await imageFrom(u);
-              blobUrl.set(src, u);
-              srcOfBlob.set(u, src);
-              return img;
-            } catch (e) {
-              URL.revokeObjectURL(u);
-            }
-          }
-          refused = true;
+    let p;
+    p = (async () => {
+      let refused = false;
+      if (!plainOnly) {
+        let blob = null;
+        try {
+          blob = await fetchBlob(BASE + src, onBytes);
+        } catch (e) {
+          if (e.stalled) throw e; // the network itself: a plain request would wait too
         }
-        for (let n = 1; ; n++) {
+        if (blob) {
+          const u = URL.createObjectURL(blob);
           try {
-            const img = await capped(imageFrom(BASE + src), STALL_MS * 2 ** (n - 1));
-            if (refused) plainOnly = true;
+            const img = await imageFrom(u);
+            blobUrl.set(src, u);
+            srcOfBlob.set(u, src);
             return img;
           } catch (e) {
-            if (n >= MAX_ATTEMPTS) throw e;
-            await sleep(500 * n);
+            URL.revokeObjectURL(u);
           }
         }
-      } catch (e) {
-        stats.failed.push(src);
-        console.warn('[assets]', e.message);
-        throw e;
+        refused = true;
+      }
+      for (let n = 1; ; n++) {
+        try {
+          const img = await capped(imageFrom(BASE + src), STALL_MS * 2 ** (n - 1));
+          if (refused) plainOnly = true;
+          return img;
+        } catch (e) {
+          if (n >= MAX_ATTEMPTS) throw e;
+          await sleep(500 * n);
+        }
       }
     })().then((img) => {
+      clearFailed(src);
       stats.loaded++;
       return img;
+    }).catch((e) => {
+      // A rejected promise must not poison the cache forever. A later
+      // preload/decode can retry after connectivity returns.
+      if (cache.get(src) === p) cache.delete(src);
+      markFailed(src);
+      console.warn('[assets]', e.message);
+      throw e;
     });
     cache.set(src, p);
     return p;
@@ -236,11 +246,12 @@ window.ZD = window.ZD || {};
      are here, not that the picture is ready to draw: a large WebP still
      has to be decoded, and if that happens during a camera move it
      competes with the move and the browser may show an empty or blurred
-     tile.  Never rejects (a failed file is logged in stats.failed). */
+     tile. A real load failure rejects; decode() quirks after a successful
+     load are tolerated because the image is still drawable. */
   async function runDecode(src) {
     const t0 = performance.now();
+    const img = await loadImage(src);
     try {
-      const img = await loadImage(src);
       if (img.decode) await Promise.race([img.decode(), sleep(DECODE_CAP_MS)]);
     } catch (e) {
       /* Some Safari versions reject decode() after a successful load;
@@ -260,21 +271,26 @@ window.ZD = window.ZD || {};
     while (activeDecodes < DECODE_CONCURRENCY && decodeQueue.length) {
       const job = decodeQueue.shift();
       activeDecodes++;
-      runDecode(job.src).finally(() => {
-        activeDecodes--;
-        decoding.delete(job.src);
-        job.resolve();
-        pumpDecodes();
-      });
+      runDecode(job.src)
+        .then(job.resolve, job.reject)
+        .finally(() => {
+          activeDecodes--;
+          decoding.delete(job.src);
+          pumpDecodes();
+        });
     }
   }
 
   function decodeOne(src) {
     if (decoding.has(src)) return decoding.get(src);
     let resolve;
-    const p = new Promise((r) => (resolve = r));
+    let reject;
+    const p = new Promise((r, j) => {
+      resolve = r;
+      reject = j;
+    });
     decoding.set(src, p);
-    decodeQueue.push({ src, resolve });
+    decodeQueue.push({ src, resolve, reject });
     pumpDecodes();
     return p;
   }
@@ -319,8 +335,9 @@ window.ZD = window.ZD || {};
     wallUrl: (key) => url(manifest.walls[key].src),
 
     /* Decode these build paths ('bg/sky.webp') before they are painted.
-       Duplicates and decodes already in flight are shared.  Resolves when
-       all are done; never rejects.  onProgress(0..1) is optional. */
+       Duplicates and decodes already in flight are shared. Resolves when
+       all are done and rejects a real load failure so a scene is never
+       shown with a known-missing texture. onProgress(0..1) is optional. */
     decode(srcs, onProgress) {
       const list = [...new Set(srcs)];
       let done = 0;
@@ -377,7 +394,6 @@ window.ZD = window.ZD || {};
         });
         await pool(files, LOAD_CONCURRENCY, (src) =>
           loadImage(src, (f) => part(src, f))
-            .catch(() => {})
             .then(() => {
               part(src, 0);
               parts.delete(src);

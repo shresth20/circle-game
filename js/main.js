@@ -1,17 +1,33 @@
 /* Boot: load locales, fit the 1920x1080 stage to the viewport, preload, start. */
 /* Fit the stage right away (before locales load) so the loading screen -
    which is the welcome screen - shows at its final size from the first frame. */
+let paintedScale = 0; // the stage scale the GPU layers were painted at
+let repaintTimer = 0;
 function fitStage() {
   const stage = document.getElementById('stage');
   const s = Math.min(window.innerWidth / 1920, window.innerHeight / 1080);
   stage.style.transform = `translate(-50%, -50%) scale(${s})`;
+  /* The camera rig, the sprites and other small movers keep will-change:
+     transform, and Chrome keeps such a layer at the scale it was first painted at:
+     after the window grows (or a tablet turns) the game would stay blurred,
+     after it shrinks it would hold oversized tiles.  Once the size settles,
+     every layer is painted again at the new scale (ZD.scene.repaint). */
+  if (!paintedScale) paintedScale = s;
+  else if (Math.abs(s / paintedScale - 1) > 0.02) {
+    clearTimeout(repaintTimer);
+    repaintTimer = setTimeout(() => {
+      paintedScale = s;
+      if (ZD.scene && ZD.scene.repaint) ZD.scene.repaint();
+    }, 300);
+  }
   const root = document.documentElement.style;
   root.setProperty('--s', s);
-  /* Full-screen overlays (#grade, #vignette, #alarm-light, .go-shade) only
-     cover what this screen shows of the stage (+ a margin for fx.shake),
-     inside their design box 2560 x 1700 at (-320, -300).  Their gradients
-     stay laid out on the design box (CSS), so the look is the same - the
-     GPU just stops rasterising and blending off-screen area. */
+  /* The game-over shade (.go-shade) only covers what this screen shows of
+     the stage (+ a margin for fx.shake), inside its design box 2560 x 1700
+     at (-320, -300).  Its gradient stays laid out on the design box (CSS),
+     so the look is the same - the GPU just stops rasterising and blending
+     off-screen area.  (The other full-screen gradients are small canvases:
+     paintWashes in js/scene.js.) */
   const M = 24;
   const l = Math.max(-320, Math.floor(960 - window.innerWidth / (2 * s)) - M);
   const t = Math.max(-300, Math.floor(540 - window.innerHeight / (2 * s)) - M);
@@ -35,11 +51,16 @@ const loading = (() => {
   let p = 0;
   let status = '';
   let ready = false;
+  let failed = false;
   let queued = false;
   const draw = () => {
     queued = false;
     if (bar) bar.style.transform = `scaleX(${p})`;
     if (!ready || !text) return;
+    if (failed) {
+      text.textContent = T('appLoadFailed');
+      return;
+    }
     const pct = Math.floor(p * 100);
     const line = status === 'offline' ? T('appOffline') : T(status === 'slow' ? 'appLoadingSlow' : 'appLoadingPct', { pct });
     if (line !== shown) text.textContent = shown = line;
@@ -58,15 +79,29 @@ const loading = (() => {
       ready = true;
       draw();
     },
+    fail() {
+      failed = true;
+      ready = true;
+      draw();
+    },
   };
 })();
 
 /* Start downloading now, in parallel with the locales - not after them. */
-const preloading = ZD.assets.preload((f, net) => loading.set(f * 0.9, net)).catch((e) => console.error('preload failed', e));
+const preloading = ZD.assets.preload((f, net) => loading.set(f * 0.9, net));
+preloading.catch(() => {}); // (handled in boot, which may await it later)
 
 async function boot() {
   const stage = document.getElementById('stage');
-  await preloading;
+  try {
+    await preloading;
+  } catch (e) {
+    // Never enter gameplay with a known-missing background or character.
+    // The loader remains visible with a useful localized failure message.
+    console.error('preload failed', e);
+    loading.fail();
+    return;
+  }
   // The welcome picture is a CSS background by path (so the loading screen
   // has it at once).  If that request of the page's (<link rel=preload> /
   // stylesheet) never finished - a phone can lose one - draw the

@@ -1,5 +1,122 @@
 # Rendering and transition audit
 
+## 2026-11-10: background flicker / pixelation at view swings, late in the game
+
+Symptom (budget tablets): when the view swings side -> front (and back), the
+background flickers - blocks look "not loaded" or pixelated - and it gets
+worse toward the end of the mission. Desktop testing looks clean.
+
+### Root cause
+
+Chrome keeps every GPU layer's painted tiles in a fixed **tile budget**:
+512 MB on a desktop, about **128-256 MB on a 2-4 GB Android tablet**. When the
+tiles the screen needs right now do not fit, Chrome still draws the frame:
+some tiles are missing (holes, "not loaded") or a stand-in at another scale
+is shown (blurred / "pixelated") until it repaints. The need peaks at a view
+swing (both views painted at once) and grows during a game (more layers,
+scenery built per wall). So it crosses the budget late in the game, and
+only on the tablet - the desktop budget is never reached.
+
+Measured with `tools/perf-lab.cjs --scenario game --raster-scale --gpu-mem 128
+--low-power --viewport 1280x800 --dpr 1.5` (a 1920x1200 tablet), the committed
+build needed **202-341 MB** of on-screen tiles per wall. Where it went:
+
+1. **`will-change: transform` inside a scaled stage.** The 1920x1080 stage is
+   shrunk to the screen (x0.67 here, ~x0.35 on a phone). Chrome paints a layer
+   with `will-change: transform` - or anything inside one - at no less than
+   the screen's native resolution (`MinimumRasterContentsScaleForWillChangeTransform`
+   in cc: "so HTML is never blurry"), ignoring the shrink. `#world` and both
+   views had it, so the whole game held (1/0.67)^2 = **2.25x** the tiles it
+   showed (~9x on a phone). Seen in the trace as `geometry_contents_scale 1.0`
+   vs `ideal_contents_scale 0.667` on every scenery layer.
+2. **Full-screen CSS gradients.** `#grade` and `#vignette` (~23 MB each), the
+   focus vignette (~10 MB) and the `#app` backdrop (~9 MB) were screens of
+   painted tiles held for the whole game - a third of a 128 MB budget.
+3. **Parallax strips as permanent layers.** ~15 strips, several 7-10k px
+   wide, each its own layer; too sparse for Chrome to merge, so each held a
+   screen of tiles even when nothing scrolled.
+4. **The next view painted seconds ahead.** Prewarm painted the hidden view
+   at the wall title / throw, so for 2-5 s both views' tiles competed and
+   the VISIBLE view lost tiles before every swing.
+5. **Growth.** A scenery band kept its start-of-road props and widened at
+   every wall; layer count during swings rose from ~90 to ~170.
+
+The uncommitted 2026-11-09 attempt (drop the strips' `will-change`, toggle
+`will-change` per tween and per swing) cut layers but made it worse in other
+ways, and was replaced: the strips repainted every frame while running
+(35,610 vs 14,273 paints, 118 dropped frames even on an M5), every tween
+promoted its target at its start scale (pops and the game-over sign stayed
+pixelated - a `will-change: transform` layer keeps its first paint scale),
+promoting / releasing the views re-layered both views at each swing, and an
+`overflow: hidden` on the views cut the scenery on 20:9 screens.
+
+### Fix (README "Performance", rules 2 and 5-11)
+
+| Change | Where |
+| --- | --- |
+| `#world` and the views: `will-change: opacity` + fixed identity transform (permanent layers, no native-resolution floor); shake in 2D | `css/style.css`, `fx.shake` |
+| Gradients drawn once into 1/5-size canvases the GPU stretches (`paintWashes`; CSS premultiplied colour stops reproduced) | `js/scene.js`, `index.html` |
+| Parallax layers (`.scrolls`) promoted only while the side view scrolls (`setScrolling`, on in `prepareRun`, off in `finishRun`), with `will-change: opacity` | `js/scene.js`, `css/style.css` |
+| Scrolling strips clipped to the world width (`.strip-clip`) so they merge at rest | `tiledLayer` |
+| Prewarm only decodes; `camera.to` paints the incoming view right before the move, across a real paint | `Camera` |
+| Start-of-road props leave the scenery band once passed | `Scatter.update` |
+| Scaling particles painted once (`will-change: transform` on sparks / puffs / rings; the ring drawn at its final size) - ~1000 repaints per knock-out before | `css/style.css`, `fx.ring` |
+| No per-tween `will-change` (pops stay sharp) | `js/motion.js` |
+| Layers repainted at the new scale after a resize | `fitStage`, `ZD.scene.repaint` |
+
+Kept from 2026-11-09: a file that fails after every retry keeps the loader
+up with `appLoadFailed` instead of starting a game with a missing texture.
+No artwork, gameplay, timing or camera framing changed; screenshots of the
+title, side and front views match the committed build (mean pixel
+difference 1-2/255 outside animated elements).
+
+### Measurements (whole mission, 6 walls + wrong answer / Replay + finale)
+
+`perf-lab --scenario game --raster-scale --low-power --viewport 1280x800 --dpr 1.5`
+
+| Budget | Build | Checkerboard frames | Frames with holes | On-screen tiles needed (peak) | Swings dropped / blended |
+| --- | --- | ---: | ---: | ---: | --- |
+| 128 MB | committed | 52 | 1978 | 341 MB | 0 / 0 |
+| 128 MB | fixed | 3 | 203 | 137 MB | 0 / 0 |
+| 256 MB (a 3-4 GB tablet's likely cap) | committed | 6 (walls 3 and 5) | 597 | 353 MB | 0 / 0 |
+| 256 MB | fixed | 0 | 165 | 139 MB | 0 / 0 |
+| 512 MB (desktop, DPR 2) | fixed | 0 | 162 | 231 MB | 0 / 0 |
+
+"Checkerboard frames" is Chrome's own verdict (a frame drawn with visible
+missing content) and is the number to trust. "Frames with holes" counts any
+on-screen tile without paint in the layer snapshots; the ~160 left on walls
+2-3 appear even at the desktop budget with 0 checkerboard frames, so they
+are not shown (tiny pebble props during a run).
+
+Per wall at 128 MB (checkerboard / hole frames / peak MB needed):
+
+| Wall | 1 | 2 | 3 (wrong answer) | 4 | 5 | 6 | finale |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| committed | 7 / 354 / 319 | 3 / 150 / 202 | 22 / 708 / 341 | 4 / 106 / 302 | 8 / 325 / 331 | 7 / 145 / 308 | 1 / 108 / 218 |
+| fixed | 0 / 5 / 128 | 0 / 86 / 128 | 3 / 98 / 131 | 0 / 2 / 84 | 0 / 10 / 137 | 0 / 0 / 101 | 0 / 2 / 73 |
+
+At 128 MB the budget is momentarily full during a run
+(`did_oom_on_last_assign`); the 3 checkerboard frames left are on the
+game-over wall (the rays' `will-change` was removed after this run).
+"Pixelated" frames (~310 in every build, committed included) are the soft
+dust puffs as they grow and a 16% softer distant zombie behind the glass.
+
+### For the next game of this kind
+
+1. Test with a tablet's budget: `--gpu-mem 128` (and 256), never only on a
+   desktop. Watch `nowMB` per wall - it must stay well under the budget at
+   the busiest moment (a swing), not just at the start.
+2. In a stage scaled to fit, promote big things with `will-change: opacity`;
+   keep `will-change: transform` for small movers (or a zoom that must not
+   repaint) and expect them to be painted at full native resolution.
+3. No full-screen CSS gradients: small canvases.
+4. Few layers at rest; parallax layers only while scrolling; clip wide strips.
+5. Decode ahead, paint right before a transition, never seconds before.
+6. Nothing may grow with time or distance (bands, pools, listeners).
+7. Never `will-change` per tween; make particles scale from their drawn size.
+
+## 2026-11-09 audit
+
 Date: 2026-11-09
 
 ## Outcome

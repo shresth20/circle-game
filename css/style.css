@@ -55,7 +55,8 @@ button { font-family: inherit; }
   position: fixed;
   inset: 0;
   overflow: clip; /* clip, not hidden: nothing may scroll the stage */
-  background: radial-gradient(ellipse at 50% 30%, #4a2370 0%, #2a123f 55%, #1a0f33 100%);
+  /* solid (no GPU tile memory); its glow is the .backdrop canvas */
+  background: var(--ink);
 }
 #stage {
   position: absolute;
@@ -69,10 +70,41 @@ button { font-family: inherit; }
 #world {
   position: absolute;
   inset: 0;
-  /* fx.shake moves it: its own compositor layer, so a shake never repaints
-     the grade / vignette gradients */
-  will-change: transform;
+  /* fx.shake moves it (2D, from the frame clock): its own compositor layer
+     for good, so a shake never repaints what is inside (it draws nothing
+     itself: no GPU memory).  will-change: OPACITY, not transform - see
+     "Paint scale" below. */
+  transform: translate(0px, 0px);
+  will-change: opacity;
 }
+/* Paint scale.  The 1920x1080 stage is shrunk to the screen (scale ~0.67 on
+   a 1280-wide tablet, ~0.35 on a phone).  Chrome paints a layer that has
+   will-change: transform - or sits INSIDE one - at no less than the screen's
+   full resolution ("so HTML is never blurry"), ignoring that shrink: such a
+   view held (1 / scale)^2 = 2.25x (tablet) to 9x (phone) the GPU tiles it
+   shows.  So the big containers (#world, the views) are kept as layers with
+   will-change: opacity, which promotes without that rule, and carry a fixed
+   identity transform so a move (shake, swing) only changes a value.
+   will-change: transform stays on small moving parts (sprites, clouds, the
+   projectile, UI) and on the front camera rig, whose zoom must never
+   re-paint (its view is the one painted at full resolution). */
+
+/* Full-screen gradients: drawn once into small canvases the GPU stretches
+   (paintWashes in js/scene.js) - one ~0.7 MB texture each instead of a
+   screen of painted tiles.  A wash covers the stage's design box
+   (2560 x 1700 from -320, -300) so 20:9 screens are covered too. */
+canvas.wash {
+  position: absolute;
+  left: -320px;
+  top: -300px;
+  width: 2560px;
+  height: 1700px;
+  pointer-events: none;
+}
+#app > .backdrop { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+
+/* after a resize: every layer re-picks its paint scale (ZD.scene.repaint) */
+#stage.repaint, #stage.repaint * { will-change: auto !important; }
 
 /* ---------------- scenes & layers ---------------- */
 .scene {
@@ -84,13 +116,16 @@ button { font-family: inherit; }
   transform-origin: 50% 50%;
   isolation: isolate;
   /* Each view is a compositor layer for good.  Promoting a view only for
-     its swing (Camera.to) rebuilt the layer tree and re-rasterised every
-     tile of both views at the start and the end of the move - on a weak
-     GPU that shows as blurred / missing background tiles.  The hidden
-     view is visibility:hidden, so it costs no GPU memory.  Views are
-     only ever translated (never scaled), so a settled view is as sharp
-     as a freshly painted one. */
-  will-change: transform, opacity;
+     its swing rebuilt the layer tree and re-rasterised every tile of both
+     views at the start and the end of the move - on a weak GPU that shows
+     as blurred / missing background tiles.  The hidden view is
+     visibility:hidden, so it costs no GPU memory.  Views are only ever
+     translated (never scaled), so a settled view is as sharp as a freshly
+     painted one.  (No overflow clip: the scenery is wider than the stage
+     so 20:9 screens stay filled.)  will-change: opacity, not transform:
+     see "Paint scale" above. */
+  transform: translateX(0px);
+  will-change: opacity;
 }
 .scene.active { opacity: 1; visibility: visible; }
 .layer {
@@ -100,6 +135,8 @@ button { font-family: inherit; }
 }
 .layer.prop { background-repeat: no-repeat; }
 .layer.tiled .tile { position: absolute; top: 0; background-repeat: no-repeat; background-position: 0 0; }
+/* a scrolling strip's world-wide window (tiledLayer in js/scene.js) */
+.strip-clip { position: absolute; overflow: hidden; pointer-events: none; }
 /* the art of a moving layer (see propLayer / sunLayer in js/scene.js) */
 .layer.prop > .art, .layer.sun > .art { position: absolute; inset: 0; background-repeat: no-repeat; }
 /* Colour filters go on the ART (.art: a still prop itself, a tile, the
@@ -122,8 +159,8 @@ button { font-family: inherit; }
   filter: var(--f-wall);
 }
 .wall-side { filter: var(--f-wall) drop-shadow(-18px 10px 14px rgba(20, 0, 40, 0.45)); }
-/* moved every frame by setScroll: own compositor layer (see scrollLayer in js/scene.js) */
-.wall-slot { position: absolute; inset: 0; pointer-events: none; will-change: transform; }
+/* moved by setScroll while the hero runs (a .scrolls layer, see below) */
+.wall-slot { position: absolute; inset: 0; pointer-events: none; }
 .wall-cover { position: absolute; overflow: visible; pointer-events: none; filter: var(--f-wall); }
 .wall-cover-wrap, .wall-box { position: absolute; inset: 0; pointer-events: none; }
 .wall-shadow { position: absolute; height: 32px; border-radius: 50%; pointer-events: none; background: radial-gradient(ellipse at center, rgba(30, 6, 40, 0.55), rgba(30, 6, 40, 0) 70%); }
@@ -135,7 +172,21 @@ button { font-family: inherit; }
 }
 .props { position: absolute; inset: 0; pointer-events: none; }
 /* generated scenery band (Scatter in js/scene.js): moved as one by transform */
-.scatter { position: absolute; left: 0; top: 0; width: 0; height: 0; pointer-events: none; will-change: transform; }
+.scatter { position: absolute; left: 0; top: 0; width: 0; height: 0; pointer-events: none; }
+/* Parallax layers (.scrolls: tiled strips, moving props, scenery bands, the
+   wall slots, the safe zone) get their own GPU layers only while the side
+   view scrolls (SideScene.setScrolling: a run, the intro's pan) - then
+   every frame is a compositor move, no repaint.  At rest and during a view
+   swing they are painted together into a few layers instead of ~15 strips
+   of their own: both views then fit a budget tablet's GPU tile memory
+   (Chrome on a 2-3 GB Android tablet gets ~128-256 MB; the permanent
+   strips needed far more and the tiles the swing needed were missing).
+   The switch happens while the picture is still, never during a swing.
+   will-change: opacity, not transform ("Paint scale" above): a layer
+   moved by a plain 2D translate is still only moved, not re-painted
+   (measured: the same paints per run), and is painted at the size it is
+   shown - with transform the far strips held 2.25x the tiles. */
+.scene.scrolling .scrolls:not(.cloud) { will-change: opacity; } /* (clouds drift: layers for good) */
 /* dry trees and towers are faded a little into the evening haze so they
    stay scenery and never compete with the wall, hero or zombie (the fade
    is the band's / layer's opacity, the tint is on each prop's art) */
@@ -148,66 +199,36 @@ button { font-family: inherit; }
 .scatter.far.distant > .art { filter: var(--f-far) brightness(0.86) saturate(0.74); }
 .layer.baked { background-size: 100% 100%; background-repeat: no-repeat; }
 
-/* colour grade: one soft-light wash unifies every asset under the sunset */
+/* colour grade: one soft-light wash unifies every asset under the sunset
+   (the gradients of these three: paintWashes in js/scene.js) */
 #grade {
-  position: absolute;
-  left: -320px;
-  top: -300px;
-  width: 2560px;
-  height: 1700px;
   z-index: 50;
-  pointer-events: none;
   mix-blend-mode: soft-light;
-  background: linear-gradient(180deg, rgba(70, 20, 150, 0.55) 0%, rgba(255, 80, 160, 0.25) 45%, rgba(255, 150, 60, 0.4) 100%);
 }
-#vignette {
-  position: absolute;
-  left: -320px;
-  top: -300px;
-  width: 2560px;
-  height: 1700px;
-  z-index: 52;
-  pointer-events: none;
-  background: radial-gradient(ellipse at 50% 45%, rgba(0, 0, 0, 0) 55%, rgba(20, 5, 40, 0.5) 100%);
-}
+#vignette { z-index: 52; }
 #alarm-light {
   position: absolute;
-  left: -320px;
-  top: -300px;
-  width: 2560px;
-  height: 1700px;
+  inset: 0;
   z-index: 51;
   pointer-events: none;
   opacity: 0;
   transition: opacity 0.5s ease-out;
 }
-/* the red light pulses on an inner layer; switching the alarm on / off
+/* the red light pulses on the inner canvas; switching the alarm on / off
    fades the container, so it never snaps mid-pulse */
-#alarm-light::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: radial-gradient(ellipse at 15% 25%, rgba(255, 50, 80, 0.55), rgba(255, 50, 80, 0.15) 40%, rgba(255, 0, 60, 0) 70%);
-  animation: alarmPulse 1.3s ease-in-out infinite alternate;
-}
+#alarm-light .alarm-pulse { animation: alarmPulse 1.3s ease-in-out infinite alternate; }
 #world.alarm #alarm-light { opacity: 1; }
 /* no pulse while the light is off (it holds its value through the fade-out) */
-#world:not(.alarm) #alarm-light::before { animation-play-state: paused; }
+#world:not(.alarm) #alarm-light .alarm-pulse { animation-play-state: paused; }
 @keyframes alarmPulse { from { opacity: 0.45; } to { opacity: 1; } }
-/* Overlays cover only the visible stage (--ov-*, set by fitStage in
-   js/main.js) - less GPU area to rasterise and blend every frame.  The
-   gradients keep their design box (2560 x 1700 at -320, -300), so they look
-   exactly as before wherever they show. */
-#grade, #vignette, #alarm-light, .go-shade {
+/* The game-over shade covers only the visible stage (--ov-*, set by
+   fitStage in js/main.js) - less GPU area to rasterise and blend.  Its
+   gradient keeps its design box (2560 x 1700 at -320, -300). */
+.go-shade {
   left: var(--ov-l, -320px);
   top: var(--ov-t, -300px);
   width: var(--ov-w, 2560px);
   height: var(--ov-h, 1700px);
-}
-#grade, #vignette, #alarm-light::before {
-  background-size: 2560px 1700px;
-  background-position: calc(-320px - var(--ov-l, -320px)) calc(-300px - var(--ov-t, -300px));
-  background-repeat: no-repeat;
 }
 #flash {
   position: absolute;
@@ -215,7 +236,7 @@ button { font-family: inherit; }
   opacity: 0;
   pointer-events: none;
   z-index: 60;
-  will-change: opacity;
+  will-change: opacity; /* a flash is a compositor fade (solid colour: no tile memory) */
 }
 /* drifting clouds: own layers, so their per-frame drift never repaints the view */
 .layer.cloud { will-change: transform; }
@@ -270,28 +291,17 @@ button { font-family: inherit; }
 /* The rig is a compositor layer for good (FrontScene.frame moves and
    zooms it, from the frame clock - not a compositor animation, whose start
    and end re-paint every layer inside it; promoting it per move
-   re-rasterised the whole view twice per move).  Clip the 2560px-wide scenery to the 1920x1080 camera aperture
-   before compositing.  Without this clip, Retina screens rasterise a
-   >4096px transformed surface; its last GPU tile can arrive late as a flat
-   purple block at bottom-right. */
+   re-rasterised the whole view twice per move).  Clip the 2560px-wide
+   scenery to the 1920x1080 camera aperture before compositing.  Without
+   this clip, Retina screens rasterise a >4096px transformed surface; its
+   last GPU tile can arrive late as a flat purple block at bottom-right. */
 .cam-rig { position: absolute; inset: 0; overflow: hidden; transform-origin: 0 0; will-change: transform; }
-/* darkens the edges while the camera focuses on the wall (outside the rig,
-   same box as #vignette; centre set in js/scene.js).  Its box is cut to
-   the visible stage like #vignette (--ov-*, fitStage in js/main.js): the
-   gradient keeps its 2560 x 1700 design box, the GPU only rasterises what
-   this screen shows. */
+/* darkens the edges while the camera focuses on the wall (outside the rig;
+   a canvas.wash, centre set in js/scene.js); its opacity follows the
+   camera every frame: a compositor fade */
 .focus-vignette {
-  position: absolute;
-  left: var(--ov-l, -320px);
-  top: var(--ov-t, -300px);
-  width: var(--ov-w, 2560px);
-  height: var(--ov-h, 1700px);
-  background-size: 2560px 1700px;
-  background-position: calc(-320px - var(--ov-l, -320px)) calc(-300px - var(--ov-t, -300px));
-  background-repeat: no-repeat;
   z-index: 40;
   opacity: 0;
-  pointer-events: none;
   will-change: opacity;
 }
 .glass-danger-layer { opacity: 0; }
@@ -358,6 +368,13 @@ button { font-family: inherit; }
    would be a GPU mask pass per shard while it flies */
 .shard { position: absolute; margin: -8px 0 0 -8px; }
 .shard svg { display: block; overflow: visible; }
+/* Particles that scale (sparks shrink, puffs / rings grow) are will-change
+   layers for their short life: painted ONCE, at the scale they start at.
+   Without it Chrome re-painted each one at every new size, every frame -
+   ~1000 paints per knock-out (measured), which on a tablet GPU delayed the
+   background's tiles.  A ring is drawn at its final size and scaled up
+   from small (fx.ring), so it stays sharp. */
+.spark, .puff, .ring { will-change: transform; }
 .spark { position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%; box-shadow: 0 0 14px 2px currentColor; }
 .ring { position: absolute; border: 6px solid; border-radius: 50%; }
 .puff {
@@ -379,11 +396,11 @@ button { font-family: inherit; }
 .dizzy span { position: absolute; left: -16px; top: -16px; font-size: 30px; color: var(--yellow); text-shadow: 0 0 10px #fff; }
 
 /* ---------------- safe zone (finale) ---------------- */
-.gate { position: absolute; pointer-events: none; will-change: transform; }
+.gate { position: absolute; pointer-events: none; }
 .safe-zone-art { position: absolute; inset: 0; background-size: 100% 100%; filter: drop-shadow(0 18px 18px rgba(20, 8, 40, 0.45)); }
 .safe-door { position: absolute; border-radius: 4px 4px 1px 1px; }
 /* sliding gate: the box clips the leaves at the pillars' inner edges */
-.safe-gate { position: absolute; overflow: hidden; pointer-events: none; will-change: transform; }
+.safe-gate { position: absolute; overflow: hidden; pointer-events: none; }
 .safe-gate-half { position: absolute; top: 0; width: 50%; height: 100%; background-size: 100% 100%; will-change: transform; }
 .safe-gate-half.left { left: 0; }
 .safe-gate-half.right { right: 0; }
@@ -1045,7 +1062,9 @@ button { font-family: inherit; }
   -webkit-mask-image: radial-gradient(circle, #000 14%, rgba(0, 0, 0, 0) 60%);
   mask-image: radial-gradient(circle, #000 14%, rgba(0, 0, 0, 0) 60%);
   animation: go-spin 90s linear infinite;
-  will-change: transform;
+  /* (no will-change: the endless spin keeps it a layer anyway, and the hint
+     would paint this 1700 px disc at full native resolution - README
+     "Performance" rule 6) */
 }
 @keyframes go-spin { to { transform: rotate(360deg); } }
 .go-sign {

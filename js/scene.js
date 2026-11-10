@@ -69,7 +69,7 @@ window.ZD = window.ZD || {};
      The disc (gradient, glow, colour filter) is the layer's .art child: the
      layer itself moves (parallax) and carries no filter. */
   function sunLayer({ x, y, d, factor }) {
-    const node = el('div', { class: 'layer sun far', style: { left: x - d / 2 + 'px', top: y - d / 2 + 'px', width: d + 'px', height: d + 'px', zIndex: 3, willChange: scrollLayer(factor) } }, [el('div', { class: 'art' })]);
+    const node = el('div', { class: 'layer sun far' + scrolls(factor), style: { left: x - d / 2 + 'px', top: y - d / 2 + 'px', width: d + 'px', height: d + 'px', zIndex: 3 } }, [el('div', { class: 'art' })]);
     return { node, factor, tiled: false, x: x - d / 2, w: d };
   }
 
@@ -118,19 +118,19 @@ window.ZD = window.ZD || {};
 
   let uid = 0;
 
-  /* A layer that setScroll moves every frame (factor != 0) gets its own
-     compositor layer, so the scroll is a compositor move.  Without it
-     Chrome merges the moving strips (road, dirt, mountains...) into one
-     huge "overlap" layer and repaints it every frame; it can't keep up and
-     draws that layer empty on some frames - the scene flickers and the
-     road / ground blink pink.
-     Such a layer never carries a CSS filter itself: its pixels sit in
-     .art children (the tiles, or one inner element) and the colour filters
+  /* A layer that setScroll moves (factor != 0) is marked `.scrolls`: it is
+     its own compositor layer only while the side view scrolls (CSS
+     `.scene.scrolling .scrolls`, SideScene.setScrolling), so a run is a
+     compositor move - no repaint.  At rest and during a view swing the
+     strips are painted together into a few layers: permanently promoted,
+     the ~15 strips (several 7-10k px wide) took far more GPU tile memory
+     than a budget tablet has, and the tiles a swing needed went missing.
+     Such a layer never carries a CSS filter itself: its pixels sit in .art
+     children (the tiles, or one inner element) and the colour filters
      (style.css) go on those.  A filter on a compositor layer is redone by
-     the GPU every frame in an offscreen pass ("render surface") - 11-13 of
-     them per frame before, measured; on the art it is applied once, when
-     the tiles are painted, and gives the same pixels. */
-  const scrollLayer = (factor) => (factor ? 'transform' : '');
+     the GPU every frame in an offscreen pass ("render surface"); on the
+     art it is applied once, when the tiles are painted: same pixels. */
+  const scrolls = (factor) => (factor ? ' scrolls' : '');
 
   /* ----------------------------------------------------------------------- */
   /* layers                                                                  */
@@ -150,12 +150,20 @@ window.ZD = window.ZD || {};
     // offset stays in [0, period)).  Every extra tile is layer area the GPU
     // rasterises and keeps - a still layer needs no spare at all.
     const count = Math.ceil((WORLD_W + (factor ? period : 0)) / tileW);
-    const node = el('div', {
-      class: 'layer tiled ' + cls,
-      style: { left: WORLD_X + 'px', top: y + 'px', width: tileW * count + 'px', height: height + 'px', zIndex: z, opacity, backgroundColor: bg || 'transparent', willChange: scrollLayer(factor) },
+    const strip = el('div', {
+      class: 'layer tiled ' + cls + scrolls(factor),
+      style: { left: (factor ? 0 : WORLD_X) + 'px', top: (factor ? 0 : y) + 'px', width: tileW * count + 'px', height: height + 'px', zIndex: z, opacity, backgroundColor: bg || 'transparent' },
     });
+    /* A scrolling strip is up to 3 world widths long (the wrap period on
+       top of the world), but only the world's width of it is ever seen: a
+       box that clips it to the world keeps what the browser paints - and
+       the layer the strip ends up in - to the world.  Unclipped, a resting
+       view's strips could not be painted together (a 7-10k px strip in a
+       screen-sized layer is mostly empty space, which the browser refuses)
+       and each held a screen of GPU tiles of its own. */
+    const node = factor ? el('div', { class: 'strip-clip', style: { left: WORLD_X + 'px', top: y + 'px', width: WORLD_W + 'px', height: height + 'px', zIndex: z } }, [strip]) : strip;
     for (let i = 0; i < count; i++) {
-      node.appendChild(
+      strip.appendChild(
         el('div', {
           class: 'tile art',
           style: {
@@ -172,19 +180,19 @@ window.ZD = window.ZD || {};
         })
       );
     }
-    return { node, factor, tiled: true, drift: 0, tileW, period };
+    return { node, strip, factor, tiled: true, drift: 0, tileW, period };
   }
 
   function scrollTiled(l, px) {
     const off = (((px * l.factor + l.drift) % l.period) + l.period) % l.period;
-    l.node.style.transform = `translateX(${-off}px)`;
+    l.strip.style.transform = `translateX(${-off}px)`;
   }
 
   /* A prop (tree, rock, cloud...).  A still prop is its own art.  A moving
-     one (factor != 0: parallax, drifting clouds) is a compositor layer whose
-     art - background, flip, colour filter - is an inner .art element, so
-     the layer's transform is free for the scroll and it needs no filter
-     pass (see scrollLayer). */
+     one (factor != 0: parallax, drifting clouds) can be a compositor layer:
+     its art - background, flip, colour filter - is an inner .art element,
+     so the layer's transform is free for the scroll and it needs no filter
+     pass (see scrolls). */
   function propLayer(key, { x, y, scale = 1, z, factor = 0, cls = '', flip = false, opacity = 1 }) {
     const img = A.image(key);
     const w = Math.round(img.w * scale);
@@ -203,7 +211,7 @@ window.ZD = window.ZD || {};
       opacity,
     };
     const node = factor
-      ? el('div', { class: 'layer prop ' + cls, style: Object.assign(box, { willChange: scrollLayer(factor) }) }, [el('div', { class: 'art', style: art })])
+      ? el('div', { class: 'layer prop ' + cls + scrolls(factor), style: box }, [el('div', { class: 'art', style: art })])
       : el('div', { class: 'layer prop art ' + cls, style: Object.assign(box, art) });
     return { node, factor, tiled: false, x, w };
   }
@@ -288,9 +296,9 @@ window.ZD = window.ZD || {};
       this.seed = seed;
       this.gen = gen;
       this.clear = clear;
-      this.node = el('div', { class: 'scatter ' + cls, style: { zIndex: z } });
+      this.node = el('div', { class: 'scatter scrolls ' + cls, style: { zIndex: z } });
       this.anchors = anchors.map((a) => Object.assign({ w: A.image(a.key).w * a.scale }, a));
-      this.anchors.forEach((a) => this.node.appendChild(this._item(a, a.x)));
+      this.anchors.forEach((a) => this.node.appendChild((a.node = this._item(a, a.x))));
       this.chunks = new Map();
     }
 
@@ -336,6 +344,16 @@ window.ZD = window.ZD || {};
         }
       }
       for (let i = lo; i <= hi; i++) if (!this.chunks.has(i)) this.chunks.set(i, this._build(i));
+      // the fixed props at the start of the road leave the band once they
+      // are behind the camera: kept in it, they stretched the band (one GPU
+      // layer while scrolling) over all the road run so far - wider at every
+      // wall
+      this.anchors.forEach((a) => {
+        const off = a.x + a.w < wx + WORLD_X - 800 || a.x > wx + WORLD_X + WORLD_W + 800;
+        if (off === (a.node.parentNode !== this.node)) return;
+        if (off) a.node.remove();
+        else this.node.appendChild(a.node);
+      });
     }
   }
 
@@ -888,10 +906,16 @@ window.ZD = window.ZD || {};
         M.fromTo(s, { scale: rand(0.8, 1.6), opacity: 1 }, { x: Math.cos(ang) * dist, y: Math.sin(ang) * dist, scale: 0, opacity: 0, ms: D(rand(500, 900)), ease: PHYS.BURST, onComplete: () => s.remove() });
       }
     },
+    /* A ring bursting from 0.3x to 4x `size`.  Drawn at its final size and
+       scaled up from small: a particle is a will-change layer (style.css),
+       painted once at the scale it starts at - grown from a small drawing
+       it would show blurred. */
     ring(container, x, y, color = '#ffd166', size = 60) {
-      const r = el('div', { class: 'ring', style: { left: x + 'px', top: y + 'px', width: size + 'px', height: size + 'px', marginLeft: -size / 2 + 'px', marginTop: -size / 2 + 'px', borderColor: color } });
+      const G = 4; // the final scale
+      const d = size * G;
+      const r = el('div', { class: 'ring', style: { left: x + 'px', top: y + 'px', width: d + 'px', height: d + 'px', marginLeft: -d / 2 + 'px', marginTop: -d / 2 + 'px', borderWidth: 6 * G + 'px', borderColor: color } });
       container.appendChild(r);
-      M.fromTo(r, { scale: 0.3, opacity: 0.9 }, { scale: 4, opacity: 0, ms: D(600), ease: PHYS.BURST, onComplete: () => r.remove() });
+      M.fromTo(r, { scale: 0.3 / G, opacity: 0.9 }, { scale: 1, opacity: 0, ms: D(600), ease: PHYS.BURST, onComplete: () => r.remove() });
     },
     puffs(container, x, y, n = 7) {
       for (let i = 0; i < n; i++) {
@@ -929,10 +953,12 @@ window.ZD = window.ZD || {};
     shake(intensity = 10, dur = 420) {
       const w = document.getElementById('world');
       M.stop(w);
+      // 2D only: #world is a layer for good (style.css); a 3D transform for
+      // the shake (force3D) would re-layer the whole world at its start and end
       M.shake(w, {
         x: [0, intensity, -intensity, intensity * 0.6, -intensity * 0.6, 0],
         y: [0, -intensity * 0.5, intensity * 0.5, -intensity * 0.3, 0],
-      }, { ms: D(dur) });
+      }, { ms: D(dur), force3D: false });
     },
   };
 
@@ -1103,7 +1129,7 @@ window.ZD = window.ZD || {};
          with the view. */
       this.rig = el('div', { class: 'cam-rig' });
       while (this.el.firstChild) this.rig.appendChild(this.el.firstChild);
-      this.focusVig = el('div', { class: 'focus-vignette' });
+      this.focusVig = el('canvas', { class: 'wash focus-vignette' });
       this.el.append(this.rig, this.focusVig);
       /* Shots: zoom `s`, framing the window centre at screen point `on`;
          `vig` = how dark the focus vignette gets.
@@ -1125,9 +1151,10 @@ window.ZD = window.ZD || {};
         lock: { s: 1.3, on: onFocus, vig: 1 },
         impact: { s: 1.12, on: { x: H.x, y: H.y }, vig: 0.55 },
       };
-      // vignette centred on the window as framed while focused
-      // (#world-sized box: 2560 x 1700 from (-320, -300), as #vignette)
-      this.focusVig.style.backgroundImage = `radial-gradient(ellipse 820px 600px at ${onFocus.x + 320}px ${onFocus.y + 300}px, rgba(14, 4, 34, 0) 42%, rgba(14, 4, 34, 0.62) 100%)`;
+      // vignette centred on the window as framed while focused (a small
+      // canvas, see paintWash; #world-sized box: 2560 x 1700 from
+      // (-320, -300), as #vignette)
+      paintWash(this.focusVig, (ctx, w, h) => radialWash(ctx, w, h, { cx: onFocus.x + 320, cy: onFocus.y + 300, rx: 820, ry: 600, stops: [[0.42, [14, 4, 34, 0]], [1, [14, 4, 34, 0.62]]] }));
       this.cam = this._shotState('wide');
       this._camTween = null; // running camera move (GSAP)
       this._camDone = null;
@@ -1556,7 +1583,7 @@ window.ZD = window.ZD || {};
     }
 
     _makeWall() {
-      const root = el('div', { class: 'wall-slot', style: { zIndex: 12 } });
+      const root = el('div', { class: 'wall-slot scrolls', style: { zIndex: 12 } });
       // contact shadow on the road, along the wall's base
       const b = this.baseLine;
       const len = Math.hypot(b.x1 - b.x0, b.y1 - b.y0);
@@ -1651,9 +1678,19 @@ window.ZD = window.ZD || {};
       this.zombie.play({ sheet: 'zombie.side.idle', fps: 7, loop: true });
     }
 
+    /* The parallax layers are GPU layers only while this view scrolls (see
+       .scrolls in style.css).  Switched while the picture is still: on when
+       a run is set up (the learner has not pressed RUN yet), off when it
+       has arrived - the browser re-layers the view on those frames. */
+    setScrolling(on) {
+      this.el.classList.toggle('scrolling', !!on);
+    }
+
     /* The next checkpoint, `distance` px further on: its wall (or, with
-       `gate`, the safe zone) waits there, still off screen. */
+       `gate`, the safe zone) waits there, still off screen.  The view is
+       about to scroll (setScrolling). */
     prepareRun(distance, { gate = false } = {}) {
+      this.setScrolling(true);
       const nw = this.nextWall;
       nw.offset = distance;
       nw.glass.restore();
@@ -1781,6 +1818,7 @@ window.ZD = window.ZD || {};
       if (this.gate) this.gateOffset = 0;
       this.travel += distance;
       this.setScroll(0);
+      this.setScrolling(false);
       this.hero.setPos(this.heroHome.x, this.heroHome.y);
       this.hero.play({ sheet: 'hero.sideIdle', fps: 9, loop: true });
     }
@@ -1802,7 +1840,7 @@ window.ZD = window.ZD || {};
       const w = Math.round(img.w * S);
       const h = Math.round(img.h * S);
       const top = Math.round(this.groundY + 4 - SAFE_ZONE.floorY * S);
-      const g = el('div', { class: 'gate safe-zone', style: { left: SAFE_ZONE.left + 'px', top: top + 'px', width: w + 'px', height: h + 'px', zIndex: 12 } });
+      const g = el('div', { class: 'gate safe-zone scrolls', style: { left: SAFE_ZONE.left + 'px', top: top + 'px', width: w + 'px', height: h + 'px', zIndex: 12 } });
       g.append(el('div', { class: 'safe-zone-art', style: { backgroundImage: `url("${A.imageUrl('safeZone')}")` } }));
       // the art has the English sign baked in; other languages get a label over it
       if (window.I18n && I18n.lang !== 'en') {
@@ -1823,7 +1861,7 @@ window.ZD = window.ZD || {};
          pillars (the box clips them at the pillars' inner edges). */
       const q = SAFE_ZONE.gate;
       if (this.gateDoors) this.gateDoors.remove();
-      this.gateDoors = el('div', { class: 'safe-gate', style: { left: SAFE_ZONE.left + q.x * S + 'px', top: top + q.y * S + 'px', width: q.w * S + 'px', height: q.h * S + 'px', zIndex: 13 } }, [this._gateLeaf('safeGateL', 'left'), this._gateLeaf('safeGateR', 'right')]);
+      this.gateDoors = el('div', { class: 'safe-gate scrolls', style: { left: SAFE_ZONE.left + q.x * S + 'px', top: top + q.y * S + 'px', width: q.w * S + 'px', height: q.h * S + 'px', zIndex: 13 } }, [this._gateLeaf('safeGateL', 'left'), this._gateLeaf('safeGateR', 'right')]);
       this.gateDoors.style.transform = `translateX(${offset}px)`;
       // clip to the doorway's shape: its top corners are bevelled like the frame
       const bv = SAFE_ZONE.gateBevel;
@@ -1958,6 +1996,89 @@ window.ZD = window.ZD || {};
   }
 
   /* ----------------------------------------------------------------------- */
+  /* full-screen washes                                                      */
+  /* ----------------------------------------------------------------------- */
+  /* The full-screen gradients - the colour grade, the vignette, the alarm
+     light, the front view's focus vignette and the page backdrop - are
+     drawn once into small canvases (1/5 of their size) that the GPU
+     stretches over their box.  A smooth gradient looks the same from a
+     fifth of the pixels, and a canvas is ONE small texture (~0.7 MB); as
+     CSS backgrounds each was a screen of painted GPU tiles held for the
+     whole game (#grade and #vignette ~23 MB each on a 1920x1200 tablet,
+     measured) - a third of a budget tablet's tile memory gone before any
+     scenery was drawn. */
+  const WASH = { w: 2560, h: 1700, k: 0.2 }; // design box (stage px, from -320, -300)
+
+  /* colour stops [[offset 0..1, [r, g, b, a]], ...] -> a canvas gradient
+     that looks like the CSS one: CSS mixes stops with premultiplied alpha,
+     canvas without, so in-between stops are added, mixed the CSS way */
+  function cssStops(g, stops) {
+    const mix = (a, b, t) => {
+      const al = a[3] + (b[3] - a[3]) * t;
+      const ch = (i) => (al ? (a[i] * a[3] + (b[i] * b[3] - a[i] * a[3]) * t) / al : a[i] + (b[i] - a[i]) * t);
+      return `rgba(${Math.round(ch(0))}, ${Math.round(ch(1))}, ${Math.round(ch(2))}, ${al.toFixed(4)})`;
+    };
+    for (let i = 0; i < stops.length - 1; i++) {
+      const [o0, c0] = stops[i];
+      const [o1, c1] = stops[i + 1];
+      for (let j = 0; j < 8; j++) g.addColorStop(o0 + ((o1 - o0) * j) / 8, mix(c0, c1, j / 8));
+    }
+    const [oN, cN] = stops[stops.length - 1];
+    g.addColorStop(oN, mix(cN, cN, 0));
+  }
+
+  /* CSS radial-gradient(ellipse rx ry at cx cy, stops) over a w x h box;
+     no rx / ry = farthest-corner, as CSS sizes a plain `ellipse` */
+  function radialWash(ctx, w, h, { cx, cy, rx, ry, stops }) {
+    if (!rx) {
+      rx = Math.max(cx, w - cx) * Math.SQRT2;
+      ry = Math.max(cy, h - cy) * Math.SQRT2;
+    }
+    const k = ry / rx;
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.scale(1, k);
+    const g = ctx.createRadialGradient(0, 0, 0, 0, 0, rx);
+    cssStops(g, stops);
+    ctx.fillStyle = g;
+    ctx.fillRect(-cx, -cy / k, w, h / k);
+    ctx.restore();
+  }
+
+  /* draw `paint(ctx, w, h)` (box px) into `canvas` at WASH.k of its size */
+  function paintWash(canvas, paint, w = WASH.w, h = WASH.h) {
+    canvas.width = Math.round(w * WASH.k);
+    canvas.height = Math.round(h * WASH.k);
+    const ctx = canvas.getContext('2d');
+    ctx.scale(canvas.width / w, canvas.height / h);
+    paint(ctx, w, h);
+  }
+
+  function paintWashes() {
+    const W = WASH.w;
+    const H = WASH.h;
+    // colour grade: one soft-light wash (CSS: mix-blend-mode on #grade)
+    // unifies every asset under the sunset
+    const grade = document.getElementById('grade');
+    if (grade) paintWash(grade, (ctx) => {
+      const g = ctx.createLinearGradient(0, 0, 0, H);
+      cssStops(g, [[0, [70, 20, 150, 0.55]], [0.45, [255, 80, 160, 0.25]], [1, [255, 150, 60, 0.4]]]);
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, W, H);
+    });
+    const vig = document.getElementById('vignette');
+    if (vig) paintWash(vig, (ctx) => radialWash(ctx, W, H, { cx: W * 0.5, cy: H * 0.45, stops: [[0.55, [0, 0, 0, 0]], [1, [20, 5, 40, 0.5]]] }));
+    // the alarm's red light (it pulses: CSS animation on this canvas)
+    const alarm = document.querySelector('#alarm-light .alarm-pulse');
+    if (alarm) paintWash(alarm, (ctx) => radialWash(ctx, W, H, { cx: W * 0.15, cy: H * 0.25, stops: [[0, [255, 50, 80, 0.55]], [0.4, [255, 50, 80, 0.15]], [0.7, [255, 0, 60, 0]]] }));
+    // the page behind the stage (seen only where the screen is wider /
+    // taller than the scenery): drawn over a unit box, stretched to #app,
+    // which is what a CSS ellipse sized to its box does
+    const back = document.querySelector('#app > .backdrop');
+    if (back) paintWash(back, (ctx, w, h) => radialWash(ctx, w, h, { cx: w * 0.5, cy: h * 0.3, stops: [[0, [74, 35, 112, 1]], [0.55, [42, 18, 63, 1]], [1, [26, 15, 51, 1]]] }), 960, 540);
+  }
+
+  /* ----------------------------------------------------------------------- */
   /* camera                                                                  */
   /* ----------------------------------------------------------------------- */
   /* Both views are compositor layers for good (.scene in style.css) and the
@@ -1967,17 +2088,24 @@ window.ZD = window.ZD || {};
      every rasterised tile of BOTH views right as they start to move; a
      weak GPU (budget tablets) then shows the low-resolution placeholder
      tiles and bare patches - the "pixelated, not loaded" flicker - at the
-     start and again at the end of the move.  The incoming view is made
-     ready ahead of time (prewarm), unseen: first every image it draws is
-     decoded (ZD.assets.decode), then it is painted, so its tiles are
-     rastered before anything moves.  to() waits for both. */
+     start and again at the end of the move.
+     The incoming view is made ready in two steps.  prewarm(), a second or
+     more ahead: every image it draws is decoded (ZD.assets.decode).  to(),
+     right before the move: it is painted, unseen, under the current view,
+     and the move starts only after a real browser paint (the compositor
+     does not show a frame until the tiles it needs are rastered).  Both
+     views are painted only for that moment and the swing itself: painted
+     seconds ahead (as before 2026-11-10), the hidden view's tiles shared the
+     GPU tile budget with the visible one for the whole wall title / throw,
+     and on a budget tablet (~128-256 MB of tiles) the VISIBLE view lost
+     tiles - holes and blurred patches before every swing, worse each wall. */
   /* The swing between views: a cut on motion.  Both views drift the same
      way at the same speed (one continuous camera move); the picture
      changes at `cut` (fraction of the move).  Only one view is on screen
      at a time - no double exposure -
      and both stay within `drift` px of where they rest, so every tile
-     the prewarm painted is still the one on screen.  (A long slide-in was
-     measured too: it starts the new view off screen, the GPU drops its
+     painted before the move is still the one on screen.  (A long slide-in
+     was measured too: it starts the new view off screen, the GPU drops its
      painted tiles, and they come back missing as it slides in.) */
   const SWING = { ms: 700, drift: 48, cut: 0.4 };
 
@@ -1989,8 +2117,7 @@ window.ZD = window.ZD || {};
       this.gen = 0;
       this._swing = null;
       this._warm = null; // name of the view being made ready for the next swing
-      this._painted = null; // ...once it is painted (unseen, under the current view)
-      this._warmReady = null; // resolves when its images are decoded and it is painted
+      this._warmReady = null; // resolves when its images are decoded
     }
 
     _scene(name) {
@@ -2027,55 +2154,35 @@ window.ZD = window.ZD || {};
     }
 
     /* Show view `name` at opacity 0.001, under the current view, so the
-       browser paints it (0 would be skipped). Once per prewarm. */
+       browser paints it (0 would be skipped). */
     _reveal(name) {
-      if (this._painted === name) return false;
-      this._painted = name;
       const view = this._scene(name).el;
       view.style.transform = '';
       view.style.opacity = '0.001';
       view.style.zIndex = '0';
       if (this.current) this._scene(this.current).el.style.zIndex = '1';
       view.classList.add('active');
-      return true;
     }
 
-    /* There is no web API that promises "all GPU tiles are uploaded".  The
-       deterministic boundary available to page code is: decoded images,
-       forced layout, then two animation frames (one complete browser paint
-       between the callbacks).  Prewarm calls this seconds before a normal
-       swing; when to() must prepare a view itself, it awaits this boundary
-       instead of racing it against a timeout. */
-    async _paint(name) {
-      if (this._warm !== name) return;
-      const view = this._scene(name).el;
-      this._reveal(name);
-      view.getBoundingClientRect();
-      await ZD.util.nextFrame();
-      await ZD.util.nextFrame();
-      if (this._warm === name) mark('camera.painted', name);
-    }
-
-    /* Make view `name` ready, unseen, so a later to(name) starts with every
-       image decoded and every tile rastered: 1. decode the images it draws
-       (through the shared bounded queue, off the raster threads' path - an
-       image the browser still holds decoded resolves at once), 2. paint it under the current
-       view.  Call it a second or more before the swing (the wall title,
-       the throw): on a budget tablet the first paint of a whole view takes
-       far longer than one frame, and a view painted while it is already
-       moving shows up as stale and missing tiles.  Into the front view,
-       `shot` frames the rig where the swing will reveal it, so the tiles
-       are painted once, at the scale they will be shown at (the camera
-       rig never re-paints them for a zoom - see FrontScene.frame). */
+    /* Make view `name` ready for a later to(name): decode every image it
+       draws (through the shared bounded queue; an image the browser still
+       holds decoded resolves at once), so its paint right before the move
+       never waits on a decode.  Call it a second or more ahead (the wall
+       title, the throw).  Into the front view, `shot` frames the rig where
+       the swing will reveal it, so its tiles are painted once, at the scale
+       they will be shown at (the rig never re-paints them for a zoom - see
+       FrontScene.frame).  Nothing is painted here (see the comment above
+       the class). */
     prewarm(name, { shot = null } = {}) {
       if (name === this.current || this._swing) return Promise.resolve();
       if (name === 'front' && this.front.shot !== (shot || 'wide')) this.front.frame(shot || 'wide', { duration: 0 });
       if (this._warm === name) return this._warmReady;
       this._syncFront(name);
       this._warm = name;
-      this._painted = null;
       mark('camera.prewarm', name);
-      this._warmReady = ZD.assets.decode(this._images(name)).then(() => this._paint(name));
+      // (a file that never loaded is on the loader's failure screen - the
+      // game does not start without it; a decode quirk must not hold a swing)
+      this._warmReady = ZD.assets.decode(this._images(name)).catch(() => {});
       return this._warmReady;
     }
 
@@ -2108,7 +2215,6 @@ window.ZD = window.ZD || {};
         s.style.zIndex = '';
       });
       this._warm = null;
-      this._painted = null;
       this._warmReady = null;
       this.current = name;
       mark('camera.settled', name);
@@ -2127,12 +2233,12 @@ window.ZD = window.ZD || {};
     }
 
     /* The swing between views (see SWING): a cut on motion, as one camera
-       move.  Waits until the new view is decoded and painted (prewarm;
-       painted here across a real paint boundary if nobody pre-warmed it). Only
-       transform / opacity of the two views, on the compositor; it never
-       scales either view (a scale would re-paint every background layer).
-       Into the front view with `shot`, the rig is placed at that shot
-       before the view is painted. */
+       move.  Waits until the new view is decoded (prewarm) and then painted
+       here, unseen, across a real paint boundary.  Only transform /
+       opacity of the two views, on the compositor; it never scales either
+       view (a scale would re-paint every background layer).  Into the front
+       view with `shot`, the rig is placed at that shot before the view is
+       painted. */
     async to(name, { duration = SWING.ms, shot = null } = {}) {
       if (this.current === name) return;
       const gen = ++this.gen;
@@ -2141,19 +2247,22 @@ window.ZD = window.ZD || {};
       const to = this._scene(name).el;
       if (this._warm !== name) this.prewarm(name, { shot });
       else if (name === 'front') this.front.frame(shot || 'wide', { duration: 0 }); // (no-op when pre-warmed at this shot)
-      // Never begin a swing with a decode or first paint still in flight.
-      // Normal game flow starts this promise seconds earlier; the await is
-      // therefore free unless a caller forgot to prewarm.
+      // never paint (or move) with a decode still in flight; normal game
+      // flow started it seconds ago, so this is free unless nobody prewarmed
       await this._warmReady;
       if (gen !== this.gen) return; // cut() took over meanwhile
-      if (this._reveal(name)) {
-        // Defensive path for a superseded prewarm. No fixed delay: wait for
-        // an actual browser paint boundary.
-        to.getBoundingClientRect();
-        await ZD.util.nextFrame();
-        await ZD.util.nextFrame();
-        if (gen !== this.gen) return;
-      }
+      // Paint the new view now, unseen.  There is no web API that promises
+      // "every GPU tile is uploaded"; the boundary page code has is a forced
+      // layout and two animation frames: the browser does not start the
+      // second frame's work until the first one's paint is on screen, and
+      // Chrome only shows a new picture once its visible tiles are
+      // rastered - on a slow GPU these frames simply take longer.
+      this._reveal(name);
+      to.getBoundingClientRect();
+      await ZD.util.nextFrame();
+      await ZD.util.nextFrame();
+      if (gen !== this.gen) return;
+      mark('camera.painted', name);
       this._tag(name);
       mark('camera.swing', name);
       from.style.zIndex = '1';
@@ -2216,7 +2325,17 @@ window.ZD = window.ZD || {};
         const sp = A.sprite(key); // (a skin may lack a sheet: zombie2 walks on its run sheet)
         if (sp) srcs.push(sp.src);
       });
-      return A.decode(srcs);
+      // (callers don't wait on it; a file that never loaded keeps the game
+      // on the loader's failure screen, so a rejection here is only a quirk)
+      return A.decode(srcs).catch(() => {});
+    },
+    /* Paint every GPU layer again at the current stage size (after a
+       resize, see fitStage in js/main.js): the will-change hints are lifted
+       for two frames, so Chrome picks each layer's scale afresh. */
+    repaint() {
+      const st = document.getElementById('stage');
+      st.classList.add('repaint');
+      requestAnimationFrame(() => requestAnimationFrame(() => st.classList.remove('repaint')));
     },
     /* Dress the wall's zombie (front + side views) as variant `i`. */
     setZombieSkin(i) {
@@ -2226,6 +2345,7 @@ window.ZD = window.ZD || {};
       this.side.zombie.setSkin(skin);
     },
     init(worldEl) {
+      paintWashes();
       this.front = new FrontScene();
       this.side = new SideScene();
       worldEl.append(this.front.el, this.side.el);

@@ -198,6 +198,7 @@ window.ZD = window.ZD || {};
       side.zombie.el.style.opacity = '';
       side.zombieOffset = 0;
       side.setScroll(0);
+      side.setScrolling(false);
       side.zombie.setPos(side.zombieHome.x, side.zombieHome.y);
       side.showCover(false);
       side.idle();

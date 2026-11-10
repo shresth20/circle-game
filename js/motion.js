@@ -100,6 +100,11 @@ window.ZD = window.ZD || {};
       v.delay = v.delayMs / 1000;
       delete v.delayMs;
     }
+    // (no will-change here: a tween that scales something up from small -
+    // a pop, the game-over sign - would keep the small raster and look
+    // pixelated: Chrome keeps a will-change: transform layer at the scale it
+    // was first painted at.  force3D 'auto' already moves it on its own
+    // layer while it tweens.)
     const release = holdTransitions(targets, drivenProps(v, from));
     const done = v.onComplete;
     const cut = v.onInterrupt;

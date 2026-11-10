@@ -19,12 +19,15 @@
 </head>
 <body>
   <div id="app">
+    <!-- full-screen gradients are small canvases the GPU stretches
+         (paintWashes in js/scene.js) -->
+    <canvas class="backdrop" aria-hidden="true"></canvas>
     <div id="stage">
       <div id="world">
         <!-- scenes are injected here by js/scene.js -->
-        <div id="grade"></div>
-        <div id="alarm-light"></div>
-        <div id="vignette"></div>
+        <canvas id="grade" class="wash" aria-hidden="true"></canvas>
+        <div id="alarm-light"><canvas class="wash alarm-pulse" aria-hidden="true"></canvas></div>
+        <canvas id="vignette" class="wash" aria-hidden="true"></canvas>
       </div>
       <div id="flash"></div>
       <div id="hud"></div>

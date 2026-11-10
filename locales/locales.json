@@ -7,6 +7,7 @@
     "appLoadingPct": "Loading... {pct}%",
     "appLoadingSlow": "Slow internet... {pct}%",
     "appOffline": "No internet. Waiting...",
+    "appLoadFailed": "Some game files could not load. Check your connection and reload.",
     "btnSkip": "Skip intro",
     "btnStartMission": "START MISSION",
     "btnRetry": "Replay",
