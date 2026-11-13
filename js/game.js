@@ -1,12 +1,15 @@
-/* Game state machine: title -> 6 walls (intro cinematic disabled) -> finale.
+/* Game state machine: title -> story / how-to-play -> 6 walls -> finale.
    The six pieces are shuffled and dealt one per wall, so every piece is
    asked exactly once per play.  Each wall = one question:
-   present (front) -> three answer buttons (+ zombie timer) -> throw ->
+   present (front) -> four answer buttons (+ zombie timer) -> the boy picks
+   the named piece out of its crate and throws it ->
      right: zombie knocked out, window opens (side), then the learner takes
        the controller: hold RUN, tap JUMP through the circle, run on to the
        next wall (runAndJump)
      wrong / time out: the zombie breaks the glass and attacks, the boy
-     falls in fright - no fight back - and Replay plays the wall again.
+       falls in fright - no fight back - GAME OVER, then a review of the
+       miss and the wall again.  Two chances per wall: after the second
+       miss the game answers the next go itself (assistTap).
    Correctness comes from ZD.geo.matches on the configured data. */
 window.ZD = window.ZD || {};
 
@@ -46,9 +49,12 @@ window.ZD = window.ZD || {};
     lose: ['zombie.side.run', 'zombie.side.leap', 'zombie.side.attack', 'hero.sideFear', 'hero.sideFall'],
     arrive: ['zombie.side.walk', 'zombie.side.run', 'zombie.side.idle'],
   };
+  /* Each wall gives this many chances.  A miss (wrong tap or time-out)
+     shows GAME OVER and the review, then the wall again; after the last
+     chance the game answers the next go itself (wall.assist). */
+  const CHANCES = 2;
   const DEFEAT_FOCUS = { x: 960, y: 960 };
   const DEFEAT_SHIFT = { x: 260, y: 90 };
-  const REPLAY_ICON = '<svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.34-5.66" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/><path d="M20.5 3.5v5h-5" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
   /* Openings for one wall (all of the wall's piece): shuffled, refilled
      when used up, and never the same opening twice in a row - so a retry
@@ -93,6 +99,10 @@ window.ZD = window.ZD || {};
   }
 
   const game = {
+    // run from one wall to the next, and from the last wall to the Safe
+    // Zone (side-view px; the intro's road pan uses the same distances)
+    WALL_RUN: 1750,
+    LAST_RUN: 2000,
     epoch: 0,
     paused: false,
     missionIndex: 0,
@@ -177,10 +187,14 @@ window.ZD = window.ZD || {};
       front.stopZombie();
       front.setZombieHp(0, 0);
       front._placeZombie(front.zpose.mid, 0);
+      // (a pick cut short leaves him bent over)
+      front.hero.setScale(front.heroScale);
+      front.crates.hide();
       front.glass.restore();
       front.setTarget(null);
       front.frame('wide', { duration: 0 });
       front.idle();
+      side.endTour();
       side.clearHorde();
       side.removeGate();
       side.walls.forEach((w, i) => {
@@ -237,11 +251,16 @@ window.ZD = window.ZD || {};
         const result = await this.playWall(wall, E);
         this.guard(E);
         if (result === 'gameover') {
-          // the boy is down: Replay retries the same wall with a fresh zombie
+          // the boy is down: GAME OVER, the review of the miss, then the same
+          // wall again with a fresh zombie and a new opening of its piece.
+          // Two chances; after the second miss the next go is answered by
+          // the game itself (wall.assist), so the learner sees it done.
+          wall.misses = (wall.misses || 0) + 1;
           await this.gameOver(E, wall);
           this.guard(E);
           this.resetAfterGameOver();
           wall.retry = true;
+          wall.assist = wall.misses >= CHANCES;
           continue;
         }
         // cleared: the window is open and the learner takes the controller -
@@ -251,7 +270,7 @@ window.ZD = window.ZD || {};
         const next = wi + 1;
         // the next wall's zombie (the other skin) walks in at the end of the run
         if (!last) ZD.scene.primeSheets('side', SHEETS.arrive, ZD.scene.zombieSkins[next % ZD.scene.zombieSkins.length]);
-        await this.runAndJump(E, last ? { distance: 2000, gate: true } : { distance: 1750, onPass: () => ZD.scene.setZombieSkin(next) });
+        await this.runAndJump(E, last ? { distance: this.LAST_RUN, gate: true } : { distance: this.WALL_RUN, onPass: () => ZD.scene.setZombieSkin(next) });
         this.guard(E);
         // build the next wall's front-view land now (it is hidden), not on
         // the frame the view swings in
@@ -276,8 +295,8 @@ window.ZD = window.ZD || {};
       camera.prewarm('front', { shot: 'focus' });
       ZD.scene.primeSheets('front', SHEETS.throw);
       // short lines, one at a time
-      const keys = wall.retry ? ['guideRetry', 'guideRetry2'] : wall.n === wall.total ? ['guideWallLast'] : ['guideWall', 'guideZombie'];
-      wall.coach = wall.n === 1 || !!wall.retry;
+      const keys = wall.assist ? ['guideRetry', 'guideAssist'] : wall.retry ? ['guideRetry', 'guideRetry2'] : wall.n === wall.total ? ['guideWallLast'] : ['guideWall', 'guideZombie'];
+      wall.coach = (wall.n === 1 || !!wall.retry) && !wall.assist;
       wall.retry = false;
       ZD.audio.play('alarm');
       side.zombieWalkIn(5200);
@@ -312,6 +331,7 @@ window.ZD = window.ZD || {};
         side.wall.glass.restore();
         side.setTarget(target);
         if (camera.current !== 'front') {
+          front.crates.hide();
           front.glass.restore();
           front.setTarget(target);
           front.glass.lightsOff();
@@ -339,10 +359,18 @@ window.ZD = window.ZD || {};
         first = false;
         this.guard(E);
 
-        const timed = !!wall.timer;
+        // third go after two misses: no timer, the game shows the answer
+        const assist = !!wall.assist;
+        const timed = !!wall.timer && !assist;
         // step by step: where to look (first wall / retry), then what to do
-        if (wall.coach) ZD.ui.guide('guideLook');
-        ZD.ui.guide('guideAsk', { kind: 'ask' });
+        let assistLine = null;
+        if (assist) {
+          ZD.ui.guide('guideAssistWatch', { kind: 'ask' });
+          assistLine = ZD.ui.guide('guideAssistIs', { vars: { name: T(geo.labelKey(target)) }, kind: 'good' });
+        } else {
+          if (wall.coach) ZD.ui.guide('guideLook');
+          ZD.ui.guide('guideAsk', { kind: 'ask' });
+        }
         ZD.audio.play('pop');
         // timed wall: after the wall's thinking time (wall.delay, shorter
         // stage by stage) the meter (face -> red line -> wall) appears and
@@ -365,6 +393,8 @@ window.ZD = window.ZD || {};
         }
         const t0 = performance.now();
         const asked = ZD.ui.ask(target.id);
+        // (its taps arrive through the same ask; an abort ends it quietly)
+        if (assist) this.assistTap(target.id, assistLine, E).catch(() => {});
         let res;
         try {
           res = await this.awaitInput(Promise.race([asked.then((id) => ({ id })), climb.then(() => ({ timeout: true }))]), E);
@@ -378,7 +408,7 @@ window.ZD = window.ZD || {};
         ZD.ui.hideBanner();
         const chosen = res.timeout ? null : res.id;
         const correct = !!chosen && geo.matches(chosen, target);
-        this.record(wall, target, chosen, performance.now() - t0);
+        this.record(wall, target, chosen, performance.now() - t0, assist);
 
         if (correct) {
           ZD.ui.markAnswer(chosen, 'correct');
@@ -387,11 +417,13 @@ window.ZD = window.ZD || {};
           await this.throwFront(geo.normalize(target), target, true, E, { final, hpIndex: hp });
           this.guard(E);
           if (final) {
-            await this.correctSide(target, E);
+            await this.correctSide(target, E, { assisted: assist });
             return 'cleared';
           }
           continue;
         }
+        // (kept for the review on the game-over screen)
+        wall.lastMiss = { target, chosen };
 
         // wrong tap or time out
         if (chosen) {
@@ -420,10 +452,46 @@ window.ZD = window.ZD || {};
       });
     },
 
+    /* The third go at a wall after two misses: the demo hand (the intro's)
+       glides to the right name and taps it once the line saying what the
+       gap is has been read; the tap goes through the open ask like a real
+       one.  The buttons ignore the learner's taps meanwhile (#stage.demo). */
+    async assistTap(id, line, E) {
+      const ov = document.getElementById('lesson');
+      const stage = document.getElementById('stage');
+      ov.innerHTML = '';
+      ov.className = 'overlay pass visible';
+      stage.classList.add('demo');
+      try {
+        const hand = ZD.intro.demoHand(ov);
+        await wait(D(700)); // (the buttons slide in)
+        this.guard(E);
+        const btn = ZD.ui.answerBtns && ZD.ui.answerBtns[id];
+        if (!btn) return;
+        await hand.enter(ZD.intro.stagePoint(btn, 0.36, 0.22));
+        this.guard(E);
+        await Promise.race([line || Promise.resolve(), wait(D(4500))]);
+        this.guard(E);
+        await hand.tap();
+        this.guard(E);
+        ZD.ui._pick(id);
+        await hand.hide();
+      } finally {
+        if (E === this.epoch) {
+          stage.classList.remove('demo');
+          ov.className = 'overlay';
+          ov.innerHTML = '';
+        }
+      }
+    },
+
     /* Teacher data: which piece was confused with which (kept on this device;
-       ZD.report() prints a summary in the console). */
-    record(wall, target, chosen, ms) {
-      const entry = { t: Date.now(), mission: this.mission.id, wall: wall.id, target: target.id, sweep: Math.round(target.sweep), chosen: chosen || 'timeout', correct: !!chosen && chosen === target.id, ms: Math.round(ms) };
+       ZD.report() prints a summary in the console).  An answer the game
+       gave itself (third go, `assisted`) is logged as chosen 'auto'. */
+    record(wall, target, chosen, ms, assisted = false) {
+      const entry = { t: Date.now(), mission: this.mission.id, wall: wall.id, target: target.id, sweep: Math.round(target.sweep), chosen: assisted ? 'auto' : chosen || 'timeout', correct: !assisted && !!chosen && chosen === target.id, ms: Math.round(ms) };
+      if (assisted) entry.assisted = true;
+      if (wall.misses) entry.attempt = wall.misses + 1;
       const log = ZD.prefs.get('log', []);
       log.push(entry);
       ZD.prefs.set('log', log.slice(-400));
@@ -442,34 +510,39 @@ window.ZD = window.ZD || {};
     },
 
     /* --------------------------------------------- front: throw sequence
-       1. lock-in: a quick punch-in on the window, its rim lights flare
-       2. pull back to the wide shot: the hero winds up and throws, the
-          piece leaving the hand as the camera settles
+       1. the picked name: the window's rim lights flare, the pieces' crates
+          (named as the buttons, same order) light the tapped one
+       2. pull back to the wide shot - the boy and the crates at his feet:
+          the crate's lid pops, the piece hops into his hands as he bends
+          (front.pickUp), he straightens up, winds up and throws
        3. the camera rides with the piece into the wall (then the outcome,
           and the view swings to the side at the window) */
     async throwFront(spec, target, correct, E, { final = true, hpIndex = 0 } = {}) {
       const { front, camera } = ZD.scene;
       const P = front.projectile;
+      const id = geo.idOf(spec); // the tapped name: its crate
       // the side view is painted now, unseen: the outcome swings to it
       // (with the sheets its characters will switch to decoded)
       camera.prewarm('side');
       if (!correct || final) ZD.scene.primeSheets('side', correct ? SHEETS.win : SHEETS.lose);
-      P.setSpec(spec, 0);
       P.show(false);
+      front.crates.show(ZD.ui.order && ZD.ui.order.includes(id) ? ZD.ui.order : [id]);
+      front.crates.light(id);
       ZD.audio.play('pick');
       front.glass.pick();
-      await front.frame('lock', { duration: 300, easing: 'easeOutCubic' });
-      this.guard(E);
-      await wait(D(200));
+      await wait(D(250));
       this.guard(E);
       ZD.audio.play('pullback');
       front.glass.highlight('idle');
-      // (ends as the piece leaves the hand, so the next move starts from rest)
-      front.frame('wide', { duration: 690, easing: 'easeInOutCubic' });
-      await wait(D(300));
+      front.frame('wide', { duration: 700, easing: 'easeInOutCubic' });
+      await wait(D(380));
       this.guard(E);
-      front.hero.play({ sheet: 'hero.backThrow', fps: 18 }).then(() => front.hero.play({ sheet: 'hero.backIdle', fps: 9, loop: true }));
-      await wait(7 / 18 * 1000);
+      await front.pickUp(id, spec);
+      this.guard(E);
+      P.setSpec(spec, 0);
+      // wind-up from the pose he picked it up in (frame 1); it leaves his hand on frame 7
+      front.hero.play({ sheet: 'hero.backThrow', fps: 18, from: 1 }).then(() => front.hero.play({ sheet: 'hero.backIdle', fps: 9, loop: true }));
+      await wait(6 / 18 * 1000);
       this.guard(E);
       if (correct) ZD.ui.hideGrid(); // buttons slide away as the piece leaves the hand
       ZD.audio.play('whoosh');
@@ -596,7 +669,7 @@ window.ZD = window.ZD || {};
     },
 
     /* ----------------------------------------------- side: correct path */
-    async correctSide(target, E, { review = true } = {}) {
+    async correctSide(target, E, { review = true, assisted = false } = {}) {
       const { side } = ZD.scene;
       const P = side.projectile;
       P.setSpec(target, 0);
@@ -616,8 +689,9 @@ window.ZD = window.ZD || {};
       // one line - the rule (it starts with the name), read aloud
       // (the bar stays up through the run-and-jump that follows)
       if (review) {
-        // two short lines: what it was, then why
-        ZD.ui.guide('guideCorrect', { vars: { name: T(geo.labelKey(target)) }, kind: 'good', now: true });
+        // two short lines: what it was, then why (no "Correct!" when the
+        // game answered it)
+        ZD.ui.guide(assisted ? 'guideAssistDone' : 'guideCorrect', { vars: { name: T(geo.labelKey(target)) }, kind: 'good', now: true });
         ZD.ui.guide(geo.ruleKey(target), { kind: 'good' });
       }
       await side.wall.glass.unlock();
@@ -1066,8 +1140,10 @@ window.ZD = window.ZD || {};
        The boy is down and the zombie keeps clawing at him.  The camera
        pushes in on the two of them (defeatCam), the view dims to dusk
        purple, a soft burst of red rays opens and the GAME OVER sign drops
-       in over them with the Replay button under it.  Replay zooms back out
-       and playMission retries the wall. */
+       in over them.  After a beat the sign makes way for the review of the
+       miss ("Look again": the gap vs. the piece picked, and why - ZD.ui
+       .reviewCard); its button (Try again, or after the last chance Show
+       me) zooms back out and playMission plays the wall again. */
     async gameOver(E, wall) {
       ZD.ui.showHud(false);
       const ov = document.getElementById('gameover');
@@ -1075,11 +1151,7 @@ window.ZD = window.ZD || {};
       const shade = el('div', { class: 'go-shade' });
       const rays = el('div', { class: 'go-rays' }, [el('div', { class: 'go-rays-spin' })]);
       const sign = el('img', { class: 'go-sign', src: ZD.assets.imageUrl('gameOverSign'), alt: T('gameOverTitle'), draggable: 'false' });
-      const btn = el('button', { class: 'btn primary huge go-retry' }, [
-        el('span', { class: 'go-retry-icon', 'aria-hidden': 'true', html: REPLAY_ICON }),
-        el('span', { text: T('btnRetry') }),
-      ]);
-      ov.append(shade, rays, sign, btn);
+      ov.append(shade, rays, sign);
       ov.className = 'overlay gameover visible';
 
       // 1. push in on the boy and the zombie; the shade comes up as the
@@ -1098,23 +1170,37 @@ window.ZD = window.ZD || {};
       this.guard(E);
       ZD.audio.play('thud');
       fx().shake(9, 320);
-      // 3. Replay pops up under it
-      await M.pop(btn, { y: 70, scale: 0.7 }, { ms: D(480) });
-      this.guard(E);
-      btn.focus({ preventScroll: true });
       // behind the game-over screen the wall is already set for the retry
       this.prepareRetry(wall);
-
-      await this.awaitInput(new Promise((res) => btn.addEventListener('click', () => {
-        ZD.audio.play('click');
-        res();
-      }, { once: true })), E);
+      // 3. a beat on the sign, then it rises away with the rays for the review
+      await wait(D(1300));
       this.guard(E);
-      // leave: the sign and button go, the camera eases back out
       ZD.audio.play('swoosh');
-      M.exit([sign, btn], { scale: 0.85 }, { ms: D(240) });
+      M.exit(rays, null, { ms: D(300) });
+      await M.to(sign, { y: -120, opacity: 0, ms: D(300), ease: EASE.IN });
+      this.guard(E);
+      // 4. "Look again": the gap vs. the piece picked, and why
+      const miss = wall.lastMiss || {};
+      const card = ZD.ui.reviewCard({
+        target: miss.target,
+        chosen: miss.chosen,
+        thrown: miss.chosen ? wrongPiece(miss.chosen, miss.target) : null,
+        button: T(wall.misses >= CHANCES ? 'btnShowMe' : 'btnTryAgain'),
+      });
+      ov.appendChild(card.el);
+      ZD.audio.play('pop');
+      await M.pop(card.el, { y: 60, scale: 0.92 }, { ms: D(420) });
+      this.guard(E);
+      card.button.focus({ preventScroll: true });
+      I18n.say(geo.reasonKey(miss.target));
+
+      await this.awaitInput(card.done, E);
+      this.guard(E);
+      // leave: the card goes, the camera eases back out
+      ZD.audio.play('swoosh');
+      M.exit(card.el, { y: 40, scale: 0.95 }, { ms: D(240) });
       const out = this.defeatCamOut(D(650));
-      await M.exit([shade, rays], null, { ms: D(500), delayMs: D(150) });
+      await M.exit(shade, null, { ms: D(500), delayMs: D(150) });
       await out;
       this.guard(E);
       ov.className = 'overlay';
@@ -1200,6 +1286,7 @@ window.ZD = window.ZD || {};
       side.idle();
       // the retry's fresh zombie walks in again (wallTitle)
       side.zombie.show(false);
+      front.crates.hide();
       front.glass.restore();
       front.frame('wide', { duration: 0 });
       front.idle();
@@ -1213,13 +1300,14 @@ window.ZD = window.ZD || {};
     const log = ZD.prefs.get('log', []);
     const rows = {};
     log.forEach((e) => {
-      const r = (rows[e.target] = rows[e.target] || { asked: 0, right: 0, timeouts: 0, mixedWith: {} });
+      const r = (rows[e.target] = rows[e.target] || { asked: 0, right: 0, timeouts: 0, shown: 0, mixedWith: {} });
       r.asked++;
       if (e.correct) r.right++;
+      else if (e.assisted) r.shown++; // answered by the game after two misses
       else if (e.chosen === 'timeout') r.timeouts++;
       else r.mixedWith[e.chosen] = (r.mixedWith[e.chosen] || 0) + 1;
     });
-    const table = Object.entries(rows).map(([piece, r]) => ({ piece, asked: r.asked, right: r.right, timeouts: r.timeouts, mixedWith: Object.entries(r.mixedWith).map(([k, n]) => `${k} x${n}`).join(', ') }));
+    const table = Object.entries(rows).map(([piece, r]) => ({ piece, asked: r.asked, right: r.right, timeouts: r.timeouts, shown: r.shown, mixedWith: Object.entries(r.mixedWith).map(([k, n]) => `${k} x${n}`).join(', ') }));
     console.table(table);
     return { answers: log.length, table };
   };

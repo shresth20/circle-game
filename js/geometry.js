@@ -21,8 +21,8 @@ window.ZD = window.ZD || {};
     return `A ${f(r)} ${f(r)} 0 ${sweep > 180 ? 1 : 0} ${dir} ${f(p.x)} ${f(p.y)}`;
   }
 
-  /* Curved band along the circumference (an arc is a curve - we give it a
-     clear thickness so it can be a projectile and a visible opening). */
+  /* Curved band along the circumference.  The game no longer draws arcs
+     this way (they are thin lines - see geo.shape); kept for piecePath. */
   function arcPath(cx, cy, r, start, sweep, thick) {
     const r2 = r - thick;
     const a0 = polar(cx, cy, r, start);
@@ -65,6 +65,12 @@ window.ZD = window.ZD || {};
     return `M ${f(p0.x)} ${f(p0.y)} ${arcCmd(r, p1, sweep, 1)}`;
   }
 
+  /* Arcs are drawn as a LINE on the circle, not as a band (LXD: a band
+     looks like a region).  The line runs this far out (fraction of r), just
+     inside the window's brick rim; the rest of the circle is shown as a
+     faint outline at the same radius. */
+  const ARC_R = 0.955;
+
   function normalize(spec) {
     const s = Object.assign({ start: 0, sweep: 90, rot: 0 }, spec);
     s.sweep = ((s.sweep % 360) + 360) % 360 || 360;
@@ -97,14 +103,41 @@ window.ZD = window.ZD || {};
       }
     },
     arcStroke,
+    ARC_R,
+    /* How a piece is DRAWN: { d, line, r }.  line: true = an open path to
+       stroke (an arc: a thin line on the circle at radius r * ARC_R),
+       false = a closed region to fill (sector, segment).  Glass openings,
+       the thrown piece and the review diagrams all draw from this. */
+    shape(spec, cx, cy, r, rotOffset = 0) {
+      const s = normalize(spec);
+      if (s.type === 'arc') return { d: arcStroke(cx, cy, r * ARC_R, s.start + rotOffset, s.sweep), line: true, r: r * ARC_R };
+      return { d: geo.piecePath(s, cx, cy, r, rotOffset), line: false, r };
+    },
     /* The six answers, in grid order (rows = size, columns = type). */
     PIECES: ['minor-arc', 'minor-sector', 'minor-segment', 'major-arc', 'major-sector', 'major-segment'],
+    TYPES: ['arc', 'sector', 'segment'],
+    /* The four answer choices for a gap (LXD rule), shuffled:
+         the gap's own name,
+         its SIZE twin  (same type, the other size),
+         a TYPE twin    (same size, another type),
+         a wild card    (any other piece)
+       so a guess has to judge both the type and the size. */
+    options(id) {
+      const { shuffle, pick } = ZD.util;
+      const [size, type] = id.split('-');
+      const sizeTwin = `${size === 'minor' ? 'major' : 'minor'}-${type}`;
+      const typeTwin = `${size}-${pick(geo.TYPES.filter((t) => t !== type))}`;
+      const wild = pick(geo.PIECES.filter((p) => p !== id && p !== sizeTwin && p !== typeTwin));
+      return shuffle([id, sizeTwin, typeTwin, wild]);
+    },
     idOf: (spec) => normalize(spec).id,
     /* i18n keys for a piece (spec or id like 'major-sector'):
          piece*  name      MINOR SECTOR
          rule*   one-line rule, repeated on the walk to the next wall */
     labelKey: (p) => I18n.key('piece', pieceId(p)),
     ruleKey: (p) => I18n.key('rule', pieceId(p)),
+    /* why a gap is that piece (two short sentences) - the review after a miss */
+    reasonKey: (p) => I18n.key('reason', pieceId(p)),
     /* Correctness is decided from data, never from pixels. */
     matches: (a, b) => pieceId(a) === pieceId(b),
     /* Mid-angle of a piece, handy for placing labels. */

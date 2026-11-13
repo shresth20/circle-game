@@ -336,6 +336,50 @@ canvas.wash {
 
 @keyframes blink { from { opacity: 1; } to { opacity: 0.35; } }
 
+/* ---------------- answer crates (front view, at the boy's feet) ----------------
+   Four closed crates named as the answer buttons (js/scene.js Crates).  The
+   tapped one lights up: its glow (painted once, static) fades in by
+   opacity; the lid pops off by transform. */
+.crates { position: absolute; inset: 0; pointer-events: none; }
+.crate { position: absolute; width: 224px; height: 118px; }
+.crate-inner, .crate-inner svg { position: absolute; left: 0; top: 0; display: block; overflow: visible; }
+.crate-shadow {
+  position: absolute;
+  left: -14px;
+  right: -14px;
+  bottom: -14px;
+  height: 30px;
+  border-radius: 50%;
+  background: radial-gradient(ellipse at center, rgba(30, 6, 40, 0.5), rgba(30, 6, 40, 0) 70%);
+}
+.crate-glow {
+  position: absolute;
+  inset: -12px -12px -6px;
+  border-radius: 24px;
+  background: rgba(255, 209, 102, 0.22);
+  box-shadow: 0 0 0 5px rgba(255, 209, 102, 0.85), 0 0 30px 10px rgba(255, 209, 102, 0.5);
+  opacity: 0;
+}
+.crate-lid { position: absolute; left: 0; top: -4px; width: 224px; height: 34px; transform-origin: 50% 100%; }
+.crate-lid svg { display: block; overflow: visible; }
+.crate-tag {
+  position: absolute;
+  left: 14px;
+  top: 44px;
+  width: 196px;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: linear-gradient(#fff6dc, #f1d9a2);
+  border: 3px solid #5b2a0e;
+  box-shadow: inset 0 -4px 0 rgba(120, 60, 10, 0.22);
+}
+.crate-tag span { font-family: var(--display); font-size: 28px; line-height: 1; color: #5b2a0e; white-space: nowrap; }
+/* lit: the tag turns the picked button's yellow */
+.crate.lit .crate-tag { background: linear-gradient(#fff3b8, #ffd166); }
+
 /* ---------------- projectile & fx ---------------- */
 .projectile {
   position: absolute;
@@ -594,7 +638,7 @@ canvas.wash {
 }
 
 /* ---------------- answer panel ----------------
-   No frame: three text pills float in the open space right of the wall.
+   No frame: four text pills float in the open space right of the wall.
    The box spans wall right edge -> stage right edge, wall top -> wall
    bottom as framed while asking (js/ui.js _placePanel sets it; the values
    below are that result) and centres the column in it, both ways.  Pills are brick-orange
@@ -966,6 +1010,33 @@ canvas.wash {
 .go-body .lesson-main { justify-content: center; }
 .go-body .lesson-body { margin-top: 6px; }
 
+/* "Look again" - the review after a miss (ZD.ui.reviewCard), over the
+   game-over shade once the sign has gone: the gap vs. the piece picked,
+   and why.  Above the shade and rays (they are positioned). */
+.review-card {
+  position: relative;
+  z-index: 2;
+  width: 1060px;
+  padding: 26px 48px 32px;
+  border-radius: 36px;
+  background: linear-gradient(180deg, #4b2580, #2a123f);
+  border: 6px solid #a56cff;
+  box-shadow: 0 30px 60px rgba(0, 0, 0, 0.6);
+  color: #fff;
+  text-align: center;
+}
+.review-title { font-family: var(--display); font-size: 58px; font-weight: 400; color: var(--yellow); margin: 0 0 10px; text-shadow: 0 4px 0 var(--purple); line-height: 1.05; }
+.review-pair { display: flex; justify-content: center; gap: 70px; margin: 14px 0 6px; }
+.review-item { display: flex; flex-direction: column; align-items: center; }
+.review-svg { display: block; overflow: visible; }
+.review-caption { font-size: 26px; font-weight: 800; opacity: 0.85; margin-top: 4px; }
+.review-name { font-family: var(--display); font-size: 40px; line-height: 1.1; letter-spacing: 0.5px; }
+.review-item.needed .review-name { color: var(--green); }
+.review-item.chosen .review-name { color: #ff8a9c; }
+.review-reason { font-size: 30px; font-weight: 700; line-height: 1.35; margin: 12px auto 0; max-width: 900px; }
+.review-card .btn-row { margin-top: 22px; }
+.review-btn { display: inline-flex; align-items: center; gap: 16px; font-size: 44px; padding: 16px 60px; }
+
 /* intro (js/intro.js): route map, demo hand, skip curtain */
 .mission-map {
   position: absolute;
@@ -1017,6 +1088,28 @@ canvas.wash {
   pointer-events: none !important;
 }
 .intro-curtain { position: absolute; inset: 0; background: #140a26; z-index: 111; pointer-events: none !important; }
+/* the road pan's wall counter (intro step 2): the HUD's stage chip, bigger,
+   top centre (centred by margins: its pop tween owns the transform) */
+.tour-count {
+  position: absolute;
+  top: 34px;
+  left: 0;
+  right: 0;
+  width: fit-content;
+  margin: 0 auto;
+  padding: 10px 34px;
+  border-radius: 999px;
+  background: var(--purple);
+  border: 5px solid var(--yellow);
+  box-shadow: 0 6px 0 #2e1450, 0 10px 20px rgba(0, 0, 0, 0.45);
+  color: #fff;
+  font-family: var(--display);
+  font-size: 48px;
+  line-height: 1.1;
+  white-space: nowrap;
+  pointer-events: none !important;
+}
+.tour-count.safe { border-color: var(--green); color: var(--green); }
 /* during the intro's demo the answer buttons and the controller only
    show what to press - taps do nothing */
 #stage.demo #options, #stage.demo #options *, #stage.demo #controls, #stage.demo #controls * { pointer-events: none !important; }
@@ -1031,9 +1124,9 @@ canvas.wash {
 
 /* game over (game.gameOver): the camera has pushed in on the boy and the
    zombie; a dusk-purple shade, a soft burst of red rays behind the sign,
-   the GAME OVER sign, Replay under it - sign + button (493 + 22 + ~120 px)
-   centred on the stage as one block.  Shade + rays cover the same box as
-   #vignette so 20:9 screens are covered too. */
+   the GAME OVER sign; after a beat the sign and rays rise away and the
+   review card (.review-card) comes up on the shade.  Shade + rays cover the
+   same box as #vignette so 20:9 screens are covered too. */
 .go-shade {
   position: absolute;
   opacity: 0;
@@ -1077,18 +1170,7 @@ canvas.wash {
   pointer-events: none;
   filter: drop-shadow(0 18px 22px rgba(12, 2, 26, 0.6));
 }
-.go-retry {
-  position: absolute;
-  left: 0;
-  right: 0;
-  width: fit-content;
-  margin: 0 auto; /* centred by margins: its pop-in tween owns the transform */
-  top: 738px;
-  display: flex;
-  align-items: center;
-  gap: 18px;
-  opacity: 0;
-}
+/* (the review card's button icon) */
 .go-retry-icon { display: flex; }
 .go-retry-icon svg { width: 52px; height: 52px; }
 

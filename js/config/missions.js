@@ -4,16 +4,19 @@
                  ARC          SECTOR          SEGMENT
        MINOR   minor arc    minor sector    minor segment
        MAJOR   major arc    major sector    major segment
-   Each question shows three of them as answer buttons: the right piece
-   plus two others at random (see ZD.ui.ask).
+   Each question shows four of them as answer buttons, chosen by rule
+   (ZD.geo.options): the right piece, its size twin (same type, other
+   size), a type twin (same size, other type) and one wild card, shuffled.
 
    One mission = 6 walls = 6 questions, one question per wall.  At the start
    of every play the six pieces are shuffled and dealt one per wall, so each
    piece is asked exactly once, in a random order.
 
    mission : { id, titleKey, rounds, openings }
-     (one wrong answer or time-out ends the run: the zombie breaks in, the
-     boy falls, and Replay plays that wall again)
+     (each wall gives two chances: a wrong answer or a time-out lets the
+     zombie break in, the boy falls, GAME OVER, then a short review and the
+     wall again with a new opening of the same piece; after a second miss
+     the game shows the answer itself on the third go - js/game.js)
      rounds   one entry per wall, in play order: { tier, timer, delay }
                  tier   which opening pool the wall draws from
                  timer  seconds before the zombie climbs through, or null
@@ -21,7 +24,8 @@
                  delay  seconds of thinking time after the question appears
                         before the timer shows up and the zombie starts
                         its walk (0 = straight away).  Falls stage by stage
-                        so later walls get harder.
+                        so later walls get harder, but never below 3 s:
+                        there are four names to read (LXD).
      openings  { tier: [O(...), ...] } - each tier must have at least 2
                openings for EVERY piece: after a miss the wall asks the
                same piece again in a different opening.
@@ -57,11 +61,11 @@ window.ZD = window.ZD || {};
       titleKey: 'mission1',
       rounds: [
         { tier: 'start', timer: 10, delay: 5 },
-        { tier: 'start', timer: 10, delay: 4 },
-        { tier: 'middle', timer: 10, delay: 3 },
-        { tier: 'middle', timer: 10, delay: 2 },
-        { tier: 'hard', timer: 10, delay: 1 },
-        { tier: 'hard', timer: 10, delay: 0 },
+        { tier: 'start', timer: 10, delay: 5 },
+        { tier: 'middle', timer: 10, delay: 4 },
+        { tier: 'middle', timer: 10, delay: 4 },
+        { tier: 'hard', timer: 10, delay: 3 },
+        { tier: 'hard', timer: 10, delay: 3 },
       ],
       openings: {
         start: tier([90], [270], [-90, 90, 0, 180]),

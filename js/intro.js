@@ -2,7 +2,8 @@
    The story is told ONE sentence at a time in the instruction bar
    (ZD.ui.guide, read aloud), over the real game sequences:
      1. the attack      - a horde runs at the wall, the alarm sounds
-     2. the goal        - the camera runs down the road to the Safe Zone
+     2. the road        - one pan past every wall (a zombie behind each,
+                          a counter ticking up) to the Safe Zone
      3. the walls       - back at the first wall, one zombie behind it
      4. the window      - front view: the glowing gap in the glass
      5. the answer      - a demo hand taps the right name; the timer runs
@@ -246,48 +247,78 @@ window.ZD = window.ZD || {};
         await step(Promise.all([line, hordeIn]));
         world.classList.remove('alarm');
 
-        /* ---- 2. the goal: down the road to the Safe Zone ------------ */
-        const PAN = 2000; // the finale's run: the Safe Zone stands there
-        side.prepareRun(PAN, { gate: true });
+        /* ---- 2. the road: past every wall to the Safe Zone ---------- */
+        // ONE continuous pan, left to right (LXD change 1): from the boy
+        // past all the walls - as far apart as in the game, a zombie behind
+        // each - to the Safe Zone gate, as far after the last wall as the
+        // game's final run.  A counter ticks up as each wall goes by.
+        const GAP = ZD.game.WALL_RUN;
+        const END = (nWalls - 1) * GAP + ZD.game.LAST_RUN;
+        side.startTour(nWalls, GAP, END);
+        const counter = el('div', { class: 'tour-count' });
+        counter.style.opacity = '0';
+        ov.insertBefore(counter, curtain);
+        let counted = -1;
+        const count = (px) => {
+          let k = -1;
+          for (let i = 0; i < nWalls; i++) if (px >= side.tourMid(i)) k = i;
+          const v = px >= END - 300 ? nWalls : k; // nWalls = the Safe Zone
+          if (v < 0 || v === counted) return;
+          const first = counted < 0;
+          counted = v;
+          counter.textContent = v === nWalls ? T('intro3Safe') : T('hudStage', { n: v + 1, total: nWalls });
+          counter.classList.toggle('safe', v === nWalls);
+          ZD.audio.play('pop');
+          M.stop(counter);
+          if (first) M.pop(counter, { y: -30, scale: 0.8 }, { ms: D(360) });
+          else M.fromTo(counter, { scale: 1.3 }, { scale: 1, ms: D(320), ease: EASE.POP });
+        };
         const cam = { x: 0 };
         const pan = (to, ms) => {
           M.stop(cam);
           return M.to(cam, { x: to, ms: D(ms), ease: PHYS.GLIDE, onUpdate: () => {
             scroll = cam.x;
-            side.setScroll(cam.x);
+            side.tourAt(cam.x);
             side.hero.setPos(side.heroHome.x - cam.x, side.heroHome.y);
             placeHorde(1);
+            count(cam.x);
           } });
         };
         heroIdle();
         say('storySafe1');
+        say('storyWalls1', { vars: { n: nWalls } });
+        say('storyWalls2');
         line = say('storySafe2');
-        await pause(700);
-        // the horde stays behind at the wall: it fades as the camera leaves
-        // it (no zombie may seem to stand at the Safe Zone)
-        M.to(horde.map((z) => z.el), { opacity: 0, ms: D(700), delayMs: D(300), ease: EASE.IN });
-        await step(pan(PAN, 2800));
+        await pause(600);
+        // (the horde stays at the first wall: it is that wall's zombie, and
+        // scrolls away with it)
+        await step(pan(END, 9500));
         side.clearHorde();
-        horde.length = 0; // (the pan back has none to move)
+        horde.length = 0;
         await step(Promise.all([line, wait(D(900))]));
 
         /* ---- 3. back to the first wall: one zombie behind it -------- */
-        say('storyWalls1', { vars: { n: nWalls } });
-        line = say('storyWalls2');
-        await step(pan(0, 2400));
+        // a quick dip to dark (the pan back would be a long blur)
+        await step(ui.hideBanner());
+        M.exit(counter, { y: -20 }, { ms: D(240) });
+        await step(M.exit(world, null, { ms: D(420) }));
+        side.endTour();
         side.removeGate();
         side.zombieOffset = 0;
         side.setScroll(0);
-        side.setScrolling(false); // (prepareRun switched it on for the pan)
+        side.setScrolling(false); // (startTour switched it on for the pan)
+        side.hero.setPos(side.heroHome.x, side.heroHome.y);
         // the front view (step 4) is painted now, unseen, so it swings in
         // with every tile ready
         camera.prewarm('front', { shot: 'focus' });
         side.zombie.el.style.opacity = '0';
         side.zombie.show(true);
         side.zombie.play({ sheet: 'zombie.side.idle', fps: 7, loop: true });
+        await nextFrame(); // (the first wall is drawn before it fades in)
+        await step(M.enter(world, null, { ms: D(500) }));
+        world.style.opacity = '';
         await step(M.enter(side.zombie.el, null, { ms: D(600) }));
         side.zombie.el.style.opacity = '';
-        await step(line);
 
         /* ---- 4. the window (front view) ----------------------------- */
         // a minor sector pointing up: clear to see, easy to name
@@ -487,5 +518,9 @@ window.ZD = window.ZD || {};
     },
   };
 
+  // (the game's third go at a wall after two misses taps the answer with
+  // the same hand: game.assistTap)
+  intro.demoHand = demoHand;
+  intro.stagePoint = stagePoint;
   ZD.intro = intro;
 })();

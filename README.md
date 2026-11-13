@@ -23,12 +23,17 @@ once loaded. Best on a landscape tablet; it scales to any 16:9 → 20:9 screen.
 questions**, one question per wall.  At the start of every play the six
 pieces (minor/major arc, sector, segment) are shuffled and dealt one per wall,
 so each piece is asked exactly once in a random order.  Each wall has one
-zombie behind a round glass window with one opening.  The learner always
-answers with the same **six pill buttons** in a side panel right of the wall
-("Which piece fits?"), in fixed type pairs - minor / major arc, sector,
-segment - so every answer needs both a type and a size (random guess = 1 in 6).  Buttons are
-never shuffled and use one neutral icon colour; colour appears only as
-feedback.
+zombie behind a round glass window with one opening.  The learner answers
+with **four pill buttons** in a side panel right of the wall, chosen by rule
+(`ZD.geo.options`, second LXD round, Nov 2026): the gap's own name, its
+*size twin* (same type, other size), a *type twin* (same size, another type)
+and a *wild card*, shuffled every time - so a guess has to judge both the
+type and the size.  Colour appears only as feedback.
+
+Arcs are drawn as a **thin line** on the circle (`geo.shape`, `ARC_R`), never
+as a band: in the glass a thin slot with the rim light along it and the rest
+of the circle as a faint outline, in flight a thin curved rod.  Sectors and
+segments stay cut-out regions.
 
 **Front-view camera** (`FrontScene.frame` + `shots` in `js/scene.js`): the
 view sits in a camera rig that zooms and pans. A camera move is one
@@ -56,10 +61,16 @@ fills the space left of the answer panel, a focus vignette darkens the
 edges). The opening's light-yellow neon rim lights then fade up
 (`GlassMech.lightUp`; the glows are separate small svgs, so they never
 repaint the zoomed view).
-When an answer is picked, the camera punches in on the window (`lock`) while
-the rim flares and the shape pings outward (`GlassMech.pick`). It then pulls
-back to the `wide` shot as the hero throws, follows the piece toward the
-wall (`impact`), and the view swings to the side at the window.
+When an answer is picked, the rim flares and the shape pings outward
+(`GlassMech.pick`) and the camera pulls back to the `wide` shot: four closed
+**crates** stand on the road at the boy's feet (`Crates` in `js/scene.js`,
+drawn in code), named as the buttons in the same order, so the names must be
+read - the pieces stay hidden inside.  The tapped name's crate lights up, its
+lid pops, the piece hops out into the boy's hands as he bends for it
+(`FrontScene.pickUp`; there is no bend sheet - it is the throw sheet's first
+pose leaning, dipping and squashing, transform only), he straightens up and
+throws.  The camera follows the piece toward the wall (`impact`), and the
+view swings to the side at the window.
 
 * **Right piece** - it slips through the glass, the view switches to the
   side, the zombie is knocked out and the window opens while the piece's
@@ -79,26 +90,41 @@ wall (`impact`), and the view swings to the side at the window.
   back where he stood (`hero.sideFall`, no knockback), and stays down while
   the zombie looms.  The camera pushes in on the two of them, the view dims
   to purple, red rays open and the GAME OVER sign (`gameOverSign`, from
-  `circle-game-art/images/gameover.png`) drops in with a **Replay** button under it;
-  Replay zooms back out and plays the same wall again with a fresh zombie (walls already cleared stay
-  cleared).  One mistake ends the run - there are no hearts.
+  `circle-game-art/images/gameover.png`) drops in.  After a beat it rises
+  away and the **Look again** review comes up (`ZD.ui.reviewCard`): the gap
+  that was needed and the piece that was thrown, side by side, and the
+  reason the gap is what it is (`reason*` keys).  Its button zooms back out
+  and plays the same wall again with a fresh zombie and a new opening of the
+  same piece (walls already cleared stay cleared).
 * **Time out** - on timed walls the zombie climbs up behind the glass (the
   timer is its distance; the rim pulses red in the last 30%).  When it gets
-  there it bangs through: same as a wrong piece.
+  there it bangs through: same as a wrong piece (the review shows the gap
+  only, "Time ran out!").
+* **Two chances per wall** (`CHANCES` in `js/game.js`).  A time-out counts
+  as a miss.  The first review's button is *Try again*, the second's *Show
+  me*: on the third go the wall has no timer and the game answers it itself -
+  "The gap is a ...", the intro's demo hand taps the right name
+  (`game.assistTap`), and the boy throws, knocks the zombie out and runs on
+  as usual.
 
 Timers and difficulty per wall come from `rounds` in the config: walls 1-2
 clear sizes, walls 3-4 rotated, walls 5-6 close to half.  Every wall has a
 10 s timer, but it only appears after a thinking time (`delay`) that shrinks
-stage by stage: 5, 4, 3, 2, 1, 0 s.  During it the zombie waits behind the
-glass; answering inside it means no timer at all.  The front view has no sun (it competed with the window).  The pause menu can switch the zombie timer off, plus
-read-aloud, sound and reduced motion.
+stage by stage but never below 3 s (four names to read): 5, 5, 4, 4, 3, 3 s.
+During it the zombie waits behind the glass; answering inside it means no
+timer at all.  The front view has no sun (it competed with the window).
 
 Every answer is logged on the device (`localStorage` key `zd.log`, last 400):
-mission, wall, opening, what was picked (or `timeout`) and time taken.  The
-mission-complete panel lists the top mix-ups ("Practise these"), and
-`ZD.report()` in the browser console prints a per-piece table for teachers.
+mission, wall, opening, what was picked (`timeout`, or `auto` when the game
+answered the third go) and time taken.  `ZD.report()` in the browser console
+prints a per-piece table for teachers (`shown` = answered by the game).
 
-The intro shows both outcomes with the same code (`throwFront`,
+The intro opens on the horde at the first wall, then **one continuous pan**
+down the whole road (`SideScene.startTour` / `tourAt`): all six walls, as far
+apart as in the game, a zombie behind each, a wall counter ticking up, and
+the Safe Zone gate at the end.  Only the two wall slots and two extra
+zombies exist - the one the camera has passed leapfrogs ahead.  It then
+shows both outcomes with the same code (`throwFront`,
 `zombieBreakIn`, `heroJumpThrough`); after the boy falls, the scene dips to
 dark and resets for the right piece.  Leaps use
 `SideScene.leapThrough` plus a wall "cover" layer so whatever has passed the
@@ -126,7 +152,7 @@ js/
                            seeded scenery (Scatter bands + biomes per wall:
                            grove / outpost / rocky / wild) so the land keeps
                            changing between walls instead of resetting
-  ui.js                    HUD, six-button answer panel, stamps, panels, bottom message bar
+  ui.js                    HUD, four-button answer panel, review card, panels, bottom message bar
   controls.js              run-and-jump controller: RUN (hold) / JUMP (tap) buttons + keys
   intro.js                 title + 3-scene cinematic
   game.js                  state machine (wall loop, outcomes, finale)

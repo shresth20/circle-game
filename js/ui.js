@@ -18,8 +18,56 @@ window.ZD = window.ZD || {};
     return s;
   }
 
+  /* A circle for the review after a miss (ui.reviewCard), drawn the way
+     the game draws it (ZD.geo.shape: an arc is a thin line on the circle,
+     the rest of the circle a faint outline; a sector / segment a region):
+       kind 'gap'    the window: glass in a brick ring with the gap cut
+                     out and outlined in green (the right answer)
+       kind 'piece'  the piece that was thrown, pointing the way it flew,
+                     in a dashed ghost circle
+     Both mark the centre (sectors touch it, segments do not). */
+  let reviewUid = 0;
+  function reviewDiagram(spec, kind, size = 300) {
+    const h = size / 2;
+    const r = size * 0.4;
+    const s = svg('svg', { viewBox: `${-h} ${-h} ${size} ${size}`, width: size, height: size, class: 'review-svg', 'aria-hidden': 'true' });
+    const sh = ZD.geo.shape(spec, 0, 0, r);
+    if (kind === 'gap') {
+      const id = 'rv' + ++reviewUid;
+      const hole = sh.line ? { d: sh.d, fill: 'none', stroke: 'black', 'stroke-width': 9, 'stroke-linecap': 'round' } : { d: sh.d, fill: 'black' };
+      // glass tinted like the game's window (GlassMech)
+      const glass = svg('radialGradient', { id: id + 'g', cx: '35%', cy: '30%', r: '80%' }, [
+        svg('stop', { offset: '0%', 'stop-color': '#b9e8ff', 'stop-opacity': '0.7' }),
+        svg('stop', { offset: '55%', 'stop-color': '#5aa3e6', 'stop-opacity': '0.6' }),
+        svg('stop', { offset: '100%', 'stop-color': '#2b2a7a', 'stop-opacity': '0.75' }),
+      ]);
+      s.append(
+        svg('defs', {}, [glass, svg('mask', { id }, [svg('rect', { x: -h, y: -h, width: size, height: size, fill: 'white' }), svg('path', hole)])]),
+        svg('circle', { r, fill: `url(#${id}g)`, mask: `url(#${id})` }),
+        // the brick ring of the window (a ring: the gap shows the dark beyond)
+        svg('circle', { r: r + 6, fill: 'none', stroke: '#5b2a0e', 'stroke-width': 16 }),
+        svg('circle', { r: r + 6, fill: 'none', stroke: '#d0652c', 'stroke-width': 9 })
+      );
+      if (sh.line) s.append(svg('circle', { r: sh.r, fill: 'none', stroke: '#ffffff', 'stroke-opacity': 0.55, 'stroke-width': 3 }));
+      s.append(svg('path', sh.line
+        ? { d: sh.d, fill: 'none', stroke: '#7cff8a', 'stroke-width': 7, 'stroke-linecap': 'round' }
+        : { d: sh.d, fill: 'rgba(20, 11, 44, 0.5)', stroke: '#7cff8a', 'stroke-width': 5, 'stroke-linejoin': 'round' }));
+    } else {
+      s.append(svg('circle', { r, fill: 'rgba(255, 255, 255, 0.06)', stroke: 'rgba(255, 255, 255, 0.5)', 'stroke-width': 3, 'stroke-dasharray': '8 8' }));
+      if (sh.line) {
+        s.append(svg('path', { d: sh.d, fill: 'none', stroke: '#7a2d12', 'stroke-width': 14, 'stroke-linecap': 'round' }));
+        s.append(svg('path', { d: sh.d, fill: 'none', stroke: '#ffb347', 'stroke-width': 8, 'stroke-linecap': 'round' }));
+      } else {
+        s.append(svg('path', { d: sh.d, fill: '#ffb347', stroke: '#7a2d12', 'stroke-width': 4, 'stroke-linejoin': 'round' }));
+      }
+    }
+    s.append(svg('circle', { r: 5.5, fill: '#ffffff', stroke: '#2a123f', 'stroke-width': 2 }));
+    return s;
+  }
+
   const ui = {
     pieceThumb,
+    reviewDiagram,
     answerBtns: null,
     init(root) {
       this.root = root;
@@ -69,11 +117,13 @@ window.ZD = window.ZD || {};
     },
 
     /* ---------------- answer panel ----------------
-       A side panel (question title + a column of three text pills) to the
-       right of the wall, clear of the window and the hero.  Each question
-       offers the right piece plus two others drawn at random from the
-       remaining five, in random order, so neither the set nor the position
-       gives the answer away.  Buttons carry only the piece id. */
+       A side panel (a column of four text pills) to the right of the wall,
+       clear of the window and the hero.  Each question offers four pieces
+       chosen by rule (ZD.geo.options: the right one, its size twin, a type
+       twin and a wild card) in random order, so neither the set nor the
+       position gives the answer away.  Buttons carry only the piece id;
+       `order` keeps their top-to-bottom order (the crates on the floor
+       of the front view line up the same way). */
     _buildPanel() {
       const box = this.optionsEl;
       box.innerHTML = '';
@@ -102,11 +152,10 @@ window.ZD = window.ZD || {};
       });
     },
     _fillOptions(targetId) {
-      const { shuffle } = ZD.util;
-      const others = shuffle(ZD.geo.PIECES.filter((id) => id !== targetId)).slice(0, 2);
+      this.order = ZD.geo.options(targetId);
       this.listEl.innerHTML = '';
       this.answerBtns = {};
-      shuffle([targetId, ...others]).forEach((id) => {
+      this.order.forEach((id) => {
         const label = T(ZD.geo.labelKey(id));
         const b = el('button', { class: 'answer', dataset: { piece: id }, 'aria-label': label }, [el('span', { class: 'answer-label', text: label })]);
         b.addEventListener('click', () => this._pick(id));
@@ -123,7 +172,7 @@ window.ZD = window.ZD || {};
       this.optionsEl.classList.add('locked');
       res(id);
     },
-    /* Show three fresh options for `targetId` and resolve with the tapped
+    /* Show four fresh options for `targetId` and resolve with the tapped
        piece id. */
     ask(targetId) {
       if (!this._panelBuilt) this._buildPanel();
@@ -479,6 +528,45 @@ window.ZD = window.ZD || {};
         ov.classList.remove('visible');
         ov.innerHTML = '';
       });
+    },
+
+    /* "Look again" - the review after a miss (LXD P8), shown on the
+       game-over screen once the sign has made way.  target: the gap's spec;
+       chosen: the tapped piece id, or null when time ran out; thrown: the
+       chosen piece as it flew (game.wrongPiece).  Two circles side by side
+       - the gap that was needed and the piece that was picked - and the
+       reason the gap is what it is (two sentences, read aloud).  The
+       button carries on (Try again, or after the second miss Show me).
+       Returns { el, button, done } - done resolves on the tap. */
+    reviewCard({ target, chosen, thrown, button }) {
+      const geo = ZD.geo;
+      const chip = chosen
+        ? el('div', { class: 'lesson-chip wrong' }, [el('span', { class: 'ico', text: '✖' }), el('span', { text: T('lessonYouChose', { name: T(geo.labelKey(chosen)) }) })])
+        : el('div', { class: 'lesson-chip time' }, [el('span', { class: 'ico', text: '⏱' }), el('span', { text: T('reviewTimeUp') })]);
+      const item = (svgEl, caption, name, cls) => el('div', { class: 'review-item ' + cls }, [
+        svgEl,
+        el('div', { class: 'review-caption', text: T(caption) }),
+        el('div', { class: 'review-name', text: T(geo.labelKey(name)) }),
+      ]);
+      const pair = el('div', { class: 'review-pair' }, [item(reviewDiagram(target, 'gap'), 'reviewGap', target.id, 'needed')]);
+      if (chosen && thrown) pair.appendChild(item(reviewDiagram(thrown, 'piece'), 'reviewYours', chosen, 'chosen'));
+      const btn = el('button', { class: 'btn primary review-btn' }, [
+        el('span', { class: 'go-retry-icon', 'aria-hidden': 'true', html: '<svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.34-5.66" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/><path d="M20.5 3.5v5h-5" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>' }),
+        el('span', { text: button }),
+      ]);
+      const card = el('div', { class: 'review-card', role: 'dialog', 'aria-label': T('reviewTitle') }, [
+        el('h2', { class: 'review-title', text: T('reviewTitle') }),
+        chip,
+        pair,
+        el('p', { class: 'review-reason', text: T(geo.reasonKey(target)) }),
+        el('div', { class: 'btn-row' }, [btn]),
+      ]);
+      const done = new Promise((res) => btn.addEventListener('click', () => {
+        ZD.audio.play('click');
+        I18n.stop();
+        res();
+      }, { once: true }));
+      return { el: card, button: btn, done };
     },
 
     /* Pause menu: just the title and Resume.  Sound is switched from the
